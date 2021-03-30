@@ -107,55 +107,6 @@ class _Sparsemax(torch.autograd.Function):
         return ctx, x.transpose(0, ctx.dim)
 
 
-class _Sparsemax2(torch.autograd.Function):
-    """gradient checking fails!!!! TODO check"""
-    """adapted from https://github.com/Qwicen/node/blob/master/lib/nn_utils.py"""
-
-    @staticmethod
-    def forward(ctx: Any, x: torch.Tensor, dim: int = -1) -> torch.Tensor:  # noqa
-        ctx.dim = dim
-
-        x -= x.max(dim=dim, keepdim=True)[0]  # for numerical stability
-
-        #
-        x_sorted, _ = torch.sort(x, descending=True, dim=dim)
-        x_cumsum = x_sorted.cumsum(dim=dim) - 1  # cumulative summation
-
-        #
-        d = x.size(dim)
-        rho = torch.arange(1, d + 1, device=x.device, dtype=x.dtype)
-        view = [1] * x.dim()
-        view[0] = -1
-        rhos = rho.view(view)
-        rhos = rhos.transpose(0, dim)
-        #
-
-        support = rhos * x_sorted > x_cumsum
-
-        support_size = support.sum(dim=dim).unsqueeze(dim)
-        tau = x_cumsum.gather(dim, support_size - 1)
-        tau /= support_size.to(x.dtype)
-        #
-
-        output = torch.clamp(x - tau, min=0)
-        ctx.save_for_backward(support_size, output)
-        return output
-
-    @staticmethod
-    def backward(ctx: Any, grad_output: torch.Tensor) -> Tuple[torch.Tensor, None]:  # noqa
-        ddim = None
-
-        support_size, output = ctx.saved_tensors
-        dim = ctx.dim
-        dx = grad_output.clone()
-        dx[output == 0] = 0
-
-        v_hat = dx.sum(dim=dim) / support_size.to(output.dtype).squeeze()
-        v_hat = v_hat.unsqueeze(dim)
-        dx = torch.where(output != 0, dx - v_hat, dx)
-        return dx, ddim
-
-
 class Sparsemax(nn.Module):
     def __init__(self, dim: int = -1):
         super(Sparsemax, self).__init__()
