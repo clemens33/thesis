@@ -1,0 +1,20 @@
+name: thesis
+channels:
+  - pytorch
+  - conda-forge
+  - anaconda
+dependencies:
+  - python=3.8
+  - pytorch
+  - torchvision
+  - torchaudio
+  - torchtext
+  - cudatoolkit=11.1
+  - jupyter
+  - notebook
+  - pip
+  - pip:
+      - pytorch-tabnet
+      - deepchem
+      - transformers
+      - pytorch-lightning
