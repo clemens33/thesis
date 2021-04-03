@@ -116,37 +116,3 @@ class Sparsemax(nn.Module):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         return self.sparsemax(input, self.dim)
-
-
-# basic tests
-if __name__ == "__main__":
-    torch.manual_seed(1)
-    torch.set_printoptions(precision=20)
-
-    B = 4
-    T = 3
-    C = 20
-
-    input = torch.randn(size=(B, T, C), dtype=torch.double, requires_grad=True)
-    s = Sparsemax()
-
-    ###
-
-    output = s(input)
-    ones = torch.sum(output, dim=-1)
-
-    assert torch.allclose(ones, torch.ones_like(ones))
-
-    print(f"numerical issues: {ones}")  # TODO check numerical issues maybe?
-    # assert (ones == 1).all(), f"last dimension does not sum up to 1"
-    ###
-
-    non_zeros = torch.count_nonzero(output, dim=-1)
-    print(f"sparsity is {1 - non_zeros / C}")
-
-    ###
-
-    test = torch.autograd.gradcheck(s, input)
-    print(f"gradient checking: {test}")
-
-    ###
