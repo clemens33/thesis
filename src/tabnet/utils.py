@@ -12,7 +12,30 @@ class GhostBatchNorm1d(nn.Module):
         self.bn = nn.BatchNorm1d(self.input_size, momentum=momentum)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        Applies ghost batch norm over 2D and 3D input. For 3D input ghost batch norm is applied over the batch size and sequence length.
+
+
+        Args:
+            input (torch.Tensor): must be of size (batch_size, input_size) or (batch_size, sequence_length, input_size).
+
+        Returns:
+            torch.Tensor of the same size as input
+
+        """
+        # skip for batch size 1
+        if len(input) == 1:
+            return input
+
+        # resize to (batch_size, input_size, sequence_length) - the pytorch default batch norm dimensions 3 dimensional data
+        input = input.transpose(-1, 1) if input.ndim == 3 else input
+
+        # apply batch norm per chunk
         chunks = torch.split(input, self.virtual_batch_size, dim=0)
         output = [self.bn(chunk) for chunk in chunks]
+        output = torch.cat(output, dim=0)
 
-        return torch.cat(output, dim=0)
+        #  resize back if necessary
+        output = output.transpose(-1, 1) if input.ndim == 3 else output
+
+        return output

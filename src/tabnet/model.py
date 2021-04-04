@@ -5,6 +5,7 @@ import torch.nn as nn
 
 from tabnet.feature import FeatureTransformer, FeatureLayer
 from tabnet.step import Step
+from tabnet.utils import GhostBatchNorm1d
 
 
 class TabNet(nn.Module):
@@ -34,12 +35,14 @@ class TabNet(nn.Module):
                 FeatureLayer(input_size=feature_size, feature_size=feature_size, momentum=momentum, **kwargs)
                 for _ in range(1, nr_shared_layers)]
 
-        self.bn = nn.BatchNorm1d(num_features=input_size, momentum=momentum)
+        # use ghost batch norm with large virtual batch size - this applies the custom default batch normalization supporting 3D inputs
+        self.bn = GhostBatchNorm1d(input_size=input_size, momentum=momentum, virtual_batch_size=torch.iinfo(int).max)
         self.feature_transformer = FeatureTransformer(input_size=input_size, feature_size=feature_size, nr_layers=nr_layers,
                                                       shared_layers=shared_layers, momentum=momentum, **kwargs)
 
         self.steps = nn.ModuleList([Step(input_size=input_size, feature_size=feature_size, decision_size=decision_size, nr_layers=nr_layers,
                                          shared_layers=shared_layers, gamma=gamma, momentum=momentum, **kwargs) for _ in range(nr_steps)])
+
 
     def forward(self, input: torch.Tensor, prior: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         input = self.bn(input)
