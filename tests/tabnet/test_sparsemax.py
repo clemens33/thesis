@@ -5,13 +5,14 @@ import torch
 class TestSparsemax():
 
     @pytest.mark.parametrize("size, dim",
-                             [((32, 10, 13), -1),
-                              ((32, 10, 1), -1),
-                              ((32, 10, 13), 0),
-                              ((32, 10, 13), 1),
-                              ((1, 1, 13), 1),
-                              ((1024, 10), -1)
-                              ])
+                             [
+                                 ((32, 10, 13), -1),
+                                 ((32, 10, 1), -1),
+                                 ((32, 10, 13), 0),
+                                 ((32, 10, 13), 1),
+                                 ((1, 1, 13), 1),
+                                 ((1024, 10), -1)
+                             ])
     def test_sparsemax(self, size, dim):
         """tests sums to one along given dimension and sparsity property"""
         from tabnet.sparsemax import Sparsemax
@@ -33,11 +34,12 @@ class TestSparsemax():
         # assert (count_zeros > 0).all()
 
     @pytest.mark.parametrize("size, dim",
-                             [((32, 10, 13), -1),
-                              ((32, 10, 1), -1),
-                              ((1, 13), 1),
-                              ((64, 64), 0)
-                              ])
+                             [
+                                 ((32, 10, 13), -1),
+                                 ((32, 10, 1), -1),
+                                 ((1, 13), 1),
+                                 ((64, 64), 0)
+                             ])
     def test_autograd(self, size, dim):
         """tests autograd"""
         from tabnet.sparsemax import Sparsemax
