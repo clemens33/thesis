@@ -12,9 +12,12 @@ dependencies:
   - cudatoolkit=11.1
   - jupyter
   - notebook
+  - rdkit
+  - pytest
   - pip
   - pip:
-      - pytorch-tabnet
-      - deepchem
       - transformers
       - pytorch-lightning
+      - datasets
+      - tensorflow~=2.4
+      - deepchem
