@@ -12,6 +12,7 @@ class TestTabNet():
                              [
                                  ((10, 64), 32, 16, 2, 2, 3, 1.0, {}),
                                  ((1, 64), 32, 16, 2, 2, 3, 1.0, {}),
+                                 ((1, 2048), 128, 64, 2, 2, 4, 1.0, {}),
                                  ((100, 10, 128), 32, 16, 2, 2, 3, 1.0, {}),
                              ])
     def test_tabnet_forward(self,
@@ -35,7 +36,10 @@ class TestTabNet():
                         nr_layers=nr_layers,
                         nr_shared_layers=nr_shared_layers,
                         nr_steps=nr_steps,
-                        gamma=gamma)
+                        gamma=gamma,
+                        **kwargs)
+
+        #print(f"number of parameters for tabnet: {sum(p.numel() for p in tabnet.parameters() if p.requires_grad)}")
 
         decision, mask, entropy = tabnet(input)
 
@@ -65,7 +69,6 @@ class TestTabNet():
                            kwargs):
         """test tabnet autograd"""
         from tabnet import TabNet
-        from itertools import product
 
         input = torch.randn(size=input_dim)
         input_size = input.shape[-1]
@@ -76,7 +79,8 @@ class TestTabNet():
                         nr_layers=nr_layers,
                         nr_shared_layers=nr_shared_layers,
                         nr_steps=nr_steps,
-                        gamma=gamma)
+                        gamma=gamma,
+                        **kwargs)
 
         def _compare_modules(module1, module2):
             for key_item1, key_item2 in zip(module1.state_dict().items(), module2.state_dict().items()):

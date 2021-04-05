@@ -15,7 +15,6 @@ class GhostBatchNorm1d(nn.Module):
         """
         Applies ghost batch norm over 2D and 3D input. For 3D input ghost batch norm is applied over the batch size and sequence length.
 
-
         Args:
             input (torch.Tensor): must be of size (batch_size, input_size) or (batch_size, sequence_length, input_size).
 
@@ -27,7 +26,7 @@ class GhostBatchNorm1d(nn.Module):
         if len(input) == 1:
             return input
 
-        # resize to (batch_size, input_size, sequence_length) - the pytorch default batch norm dimensions 3 dimensional data
+        # resize to (batch_size, input_size, sequence_length) - the pytorch default batch norm dimensions for 3 dimensional data
         input = input.transpose(-1, 1) if input.ndim == 3 else input
 
         # apply batch norm per chunk

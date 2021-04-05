@@ -20,6 +20,7 @@ class TestSparsemax():
         input = torch.randn(*size)
 
         s = Sparsemax(dim=dim)
+
         output = s(input)
 
         expect_ones = torch.sum(output, dim=dim)
@@ -47,5 +48,8 @@ class TestSparsemax():
         input = torch.randn(*size, dtype=torch.double, requires_grad=True)
 
         s = Sparsemax(dim=dim)
+
+        # gradcheck by default works with double
+        s.double()
 
         assert torch.autograd.gradcheck(s, input)
