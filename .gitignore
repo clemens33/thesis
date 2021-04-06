@@ -133,3 +133,4 @@ idea
 idea/
 
 dummy
+*lightning_logs*
