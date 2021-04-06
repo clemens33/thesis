@@ -115,13 +115,13 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         # sort classes/weights
         sorted_indices = np.argsort(self.classes)
         self.classes = self.classes[sorted_indices]
-        self.class_weights = self.class_weights[sorted_indices] if self.class_weights is not None else None
+        self.class_weights = self.class_weights[sorted_indices].tolist() if self.class_weights is not None else None
 
         # split and create dataset
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=.2, random_state=self.seed,
-                                                          stratify=self.classes if self.split == "stratify" else None)
-        self.train_dataset = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
-        self.val_dataset = TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val))
+                                                          stratify=self.classes if self.split == "stratified" else None)
+        self.train_dataset = TensorDataset(torch.from_numpy(X_train).float(), torch.from_numpy(y_train).long().squeeze())
+        self.val_dataset = TensorDataset(torch.from_numpy(X_val).float(), torch.from_numpy(y_val).long().squeeze())
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, pin_memory=True)
