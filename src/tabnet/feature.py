@@ -7,22 +7,30 @@ import torch.nn as nn
 from tabnet.utils import GhostBatchNorm1d
 
 
+class GLU(nn.Module):
+    def __init__(self, n_units: int):
+        super(GLU, self).__init__()
+
+        self.n_units = n_units
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return input[..., :self.n_units] * torch.sigmoid(input[..., self.n_units:])
+
+
 class FeatureLayer(nn.Module):
     def __init__(self, input_size: int, feature_size: int, bias: bool = False, **kwargs):
         super(FeatureLayer, self).__init__()
 
-        self.feature_size = feature_size
         self.fc = nn.Linear(in_features=input_size, out_features=feature_size * 2, bias=bias)
         self.bn = GhostBatchNorm1d(input_size=feature_size * 2, **kwargs)
 
-        self.glu = lambda input, n_units: input[..., :n_units] * torch.sigmoid(input[..., n_units:])
+        self.glu = GLU(n_units=feature_size)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         feature = self.fc(input)
         feature = self.bn(feature)
 
-        # output = self.bn(self.fc(input))
-        feature = self.glu(feature, self.feature_size)
+        feature = self.glu(feature)
 
         return feature
 
