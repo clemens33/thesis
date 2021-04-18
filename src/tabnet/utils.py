@@ -22,15 +22,19 @@ class GhostBatchNorm1d(nn.Module):
             torch.Tensor of the same size as input
 
         """
-        # skip for batch size 1
-        if len(input) == 1:
+        # skip for batch size 1 and training
+        if len(input) == 1 and self.training:
             return input
 
         # resize to (batch_size, input_size, sequence_length) - the pytorch default batch norm dimensions for 3 dimensional data
         input = input.transpose(-1, 1) if input.ndim == 3 else input
 
+        # vb is set to 1 in the original tabnet tf implementation during evaluation - TODO check why?
+        # vb = self.virtual_batch_size if self.training else 1
+        vb = self.virtual_batch_size
+
         # apply batch norm per chunk
-        chunks = torch.split(input, self.virtual_batch_size, dim=0)
+        chunks = torch.split(input, vb, dim=0)
         output = [self.bn(chunk) for chunk in chunks]
         output = torch.cat(output, dim=0)
 
