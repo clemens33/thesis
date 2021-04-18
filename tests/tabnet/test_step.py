@@ -23,8 +23,8 @@ class TestStep():
 
         shared_layers = []
         if nr_shared_layers > 0:
-            shared_layers.append(FeatureLayer(input_size=input_size, feature_size=feature_size, **kwargs))
-            shared_layers += [FeatureLayer(input_size=feature_size, feature_size=feature_size, **kwargs) for _ in
+            shared_layers.append(FeatureLayer.init_layer(input_size=input_size, feature_size=feature_size, **kwargs))
+            shared_layers += [FeatureLayer.init_layer(input_size=feature_size, feature_size=feature_size, **kwargs) for _ in
                               range(1, nr_shared_layers)]
 
         step = Step(input_size=input_size, feature_size=feature_size, decision_size=decision_size, nr_layers=nr_layers,

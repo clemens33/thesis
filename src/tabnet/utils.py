@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class GhostBatchNorm1d(nn.Module):
-    def __init__(self, input_size: int, momentum: float = 0.1, virtual_batch_size: int = 8):
+    def __init__(self, input_size: int, momentum: float = 0.1, virtual_batch_size: int = 8, **kwargs):
         super(GhostBatchNorm1d, self).__init__()
 
         self.input_size = input_size
@@ -30,11 +30,11 @@ class GhostBatchNorm1d(nn.Module):
         input = input.transpose(-1, 1) if input.ndim == 3 else input
 
         # vb is set to 1 in the original tabnet tf implementation during evaluation - TODO check why?
-        # vb = self.virtual_batch_size if self.training else 1
-        vb = self.virtual_batch_size
+        vbs = self.virtual_batch_size
+        # vbs = self.virtual_batch_size if self.training else 1
 
         # apply batch norm per chunk
-        chunks = torch.split(input, vb, dim=0)
+        chunks = torch.split(input, vbs, dim=0)
         output = [self.bn(chunk) for chunk in chunks]
         output = torch.cat(output, dim=0)
 

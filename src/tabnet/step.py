@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 from tabnet.attentive import AttentiveTransformer
-from tabnet.feature import FeatureTransformer, FeatureLayer
+from tabnet.feature import FeatureTransformer, Layer
 
 
 class Step(nn.Module):
@@ -13,7 +13,7 @@ class Step(nn.Module):
                  feature_size: int,
                  decision_size: int,
                  nr_layers: int = 1,
-                 shared_layers: Optional[List[FeatureLayer]] = None,
+                 shared_layers: Optional[List[Layer]] = None,
                  gamma: float = 1.0,
                  decision_activation: nn.Module = nn.ReLU(),
                  **kwargs):

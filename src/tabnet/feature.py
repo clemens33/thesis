@@ -17,11 +17,31 @@ class GLU(nn.Module):
         return input[..., :self.n_units] * torch.sigmoid(input[..., self.n_units:])
 
 
-class FeatureLayer(nn.Module):
+class Layer(nn.Module):
     def __init__(self, input_size: int, feature_size: int, bias: bool = False, **kwargs):
+        super(Layer, self).__init__()
+
+        self.input_size = input_size
+        self.feature_size = feature_size
+
+        self.fc = nn.Linear(in_features=input_size, out_features=feature_size, bias=bias)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return self.fc(input)
+
+
+class FeatureLayer(nn.Module):
+    """feature layer using gated linear unit activation"""
+
+    def __init__(self, input_size: int, feature_size: int, shared_layer: Optional[Layer] = None, **kwargs):
         super(FeatureLayer, self).__init__()
 
-        self.fc = nn.Linear(in_features=input_size, out_features=feature_size * 2, bias=bias)
+        if shared_layer is not None:
+            assert shared_layer.input_size == input_size, f"shared_layer in_features {shared_layer.input_size} do not match input_size {input_size}"
+            assert shared_layer.feature_size == feature_size * 2, f"shared_layer out_features {shared_layer.feature_size} do not match feature_size * 2 {feature_size}"
+
+        self.fc = shared_layer if shared_layer is not None else FeatureLayer.init_layer(input_size=input_size, feature_size=feature_size,
+                                                                                        **kwargs)
         self.bn = GhostBatchNorm1d(input_size=feature_size * 2, **kwargs)
 
         self.glu = GLU(n_units=feature_size)
@@ -34,9 +54,14 @@ class FeatureLayer(nn.Module):
 
         return feature
 
+    @staticmethod
+    def init_layer(input_size: int, feature_size: int, **kwargs) -> Layer:
+        """custom init function accounting for the double feature size due to the gated linear unit activation"""
+        return Layer(input_size=input_size, feature_size=feature_size * 2, **kwargs)
+
 
 class FeatureTransformer(nn.Module):
-    def __init__(self, input_size: int, feature_size: int, nr_layers: int = 1, shared_layers: Optional[List[FeatureLayer]] = None,
+    def __init__(self, input_size: int, feature_size: int, nr_layers: int = 1, shared_layers: Optional[List[Layer]] = None,
                  normalize: float = math.sqrt(.5), **kwargs):
         super(FeatureTransformer, self).__init__()
 
@@ -46,7 +71,9 @@ class FeatureTransformer(nn.Module):
 
         if shared_layers:
             self.layers = nn.ModuleList(
-                shared_layers +
+                [FeatureLayer(input_size=input_size, feature_size=feature_size, shared_layer=shared_layers[0], **kwargs)] +
+                [FeatureLayer(input_size=feature_size, feature_size=feature_size, shared_layer=shared_layer, **kwargs) for shared_layer in
+                 shared_layers[1:]] +
                 [FeatureLayer(input_size=feature_size, feature_size=feature_size, **kwargs) for _ in range(nr_layers)]
             )
         else:

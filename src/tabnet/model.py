@@ -30,9 +30,9 @@ class TabNet(nn.Module):
         shared_layers = []
         if nr_shared_layers > 0:
             shared_layers.append(
-                FeatureLayer(input_size=input_size, feature_size=feature_size, momentum=momentum, **kwargs))
+                FeatureLayer.init_layer(input_size=input_size, feature_size=feature_size, **kwargs))
             shared_layers += [
-                FeatureLayer(input_size=feature_size, feature_size=feature_size, momentum=momentum, **kwargs)
+                FeatureLayer.init_layer(input_size=feature_size, feature_size=feature_size, **kwargs)
                 for _ in range(1, nr_shared_layers)]
 
         # use ghost batch norm with large virtual batch size - this applies the custom default batch normalization supporting 3D inputs
@@ -42,7 +42,6 @@ class TabNet(nn.Module):
 
         self.steps = nn.ModuleList([Step(input_size=input_size, feature_size=feature_size, decision_size=decision_size, nr_layers=nr_layers,
                                          shared_layers=shared_layers, gamma=gamma, momentum=momentum, **kwargs) for _ in range(nr_steps)])
-
 
     def forward(self, input: torch.Tensor, prior: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         input = self.bn(input)
