@@ -50,6 +50,6 @@ class FeatureTransformer(nn.Module):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         feature = input
         for layer_nr, layer in enumerate(self.layers):
-            feature = layer(feature) + feature * self.normalize if layer_nr > 0 else layer(feature)
+            feature = (layer(feature) + feature) * self.normalize if layer_nr > 0 else layer(feature)
 
         return feature
