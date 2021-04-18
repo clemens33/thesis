@@ -1,20 +1,19 @@
 from argparse import ArgumentParser
-from typing import Tuple, Union, Optional, List
+from typing import Tuple, Optional, List
 
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-from torch.optim import AdamW
+from torch.optim import AdamW, Optimizer, Adam
+from torch.optim.lr_scheduler import StepLR
+from torchmetrics import MetricCollection, Accuracy
 
 from tabnet import TabNet
-from tabnet_lightning.utils import get_linear_schedule_with_warmup
-
-from torchmetrics import MetricCollection, Accuracy, Precision, Recall
+from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler
 
 
 class TabNetClassifier(pl.LightningModule):
     def __init__(self,
-                 #
                  input_size: int,
                  feature_size: int,
                  decision_size: int,
@@ -29,10 +28,15 @@ class TabNetClassifier(pl.LightningModule):
                  #
                  lambda_sparse: float = 1e-4,
                  #
+                 categorical_indices: Optional[List[int]] = None,
+                 categorical_size: Optional[List[int]] = None,
+                 embedding_dims: Optional[List[int]] = None,
+                 #
                  lr: float = 1e-4,
-                 weight_decay: float = 1e-3,
+                 optimizer: str = "adam",
+                 optimizer_params: Optional[dict] = None,
                  scheduler: str = "none",
-                 num_warmup_steps: Union[int, float] = 0.1,
+                 scheduler_params: Optional[dict] = None,
                  #
                  class_weights: Optional[List[float]] = None,
                  #
@@ -43,9 +47,16 @@ class TabNetClassifier(pl.LightningModule):
         self.lambda_sparse = lambda_sparse
 
         self.lr = lr
-        self.weight_decay = weight_decay
-        self.num_warmup_steps = num_warmup_steps
+
+        self.optimizer = optimizer
+        self.optimizer_params = optimizer_params
+
         self.scheduler = scheduler
+        self.scheduler_params = scheduler_params
+
+        self.categorical_indices = categorical_indices
+        if self.categorical_indices is not None:
+            self.embeddings = self._init_categorical_embeddings(categorical_size, embedding_dims)
 
         self.encoder = TabNet(input_size=input_size,
                               feature_size=feature_size,
@@ -66,22 +77,46 @@ class TabNetClassifier(pl.LightningModule):
 
         metrics = MetricCollection([
             Accuracy(),
-            # Precision(num_classes=num_classes, average="macro"),
-            # Recall(num_classes=num_classes, average="macro")
+            # AUROC(num_classes=num_classes, average="macro") # TODO check -> leads to memory leak
         ])
 
-        self.train_metrics = metrics.clone()
-        self.val_metrics = metrics.clone()
+        self.train_metrics = metrics.clone(prefix="train/")
+        self.val_metrics = metrics.clone(prefix="val/")
+        self.test_metrics = metrics.clone(prefix="test/")
+
+        self.save_hyperparameters()
+
+    def _init_categorical_embeddings(self, categorical_size: Optional[List[int]] = None,
+                                     embedding_dims: Optional[List[int]] = None) -> nn.ModuleList:
+
+        assert len(categorical_size) == len(
+            embedding_dims), f"categorical_size length {len(categorical_size)} must be the same as embedding_dims length {len(embedding_dims)}"
+
+        return nn.ModuleList([
+            nn.Embedding(num_embeddings=size, embedding_dim=dim) for size, dim in zip(categorical_size, embedding_dims)
+        ])
 
     def forward(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.categorical_indices is not None:
+            inputs = self._embeddings(inputs)
+
         decision, mask, entropy = self.encoder(inputs)
 
         logits = self.classifier(decision)
 
         return logits, mask, entropy
 
+    def _embeddings(self, inputs: torch.Tensor) -> torch.Tensor:
+        for idx, embedding in zip(self.categorical_indices, self.embeddings):
+            input = inputs[..., idx].long()
+
+            output = embedding(input)
+            inputs[..., idx] = output[..., 0]
+
+        return inputs
+
     def _step(self, inputs: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        logits, _, entropy = self(inputs)
+        logits, mask, entropy = self(inputs)
         preds = torch.softmax(logits, dim=-1)
 
         loss = self.loss_fn(logits, labels)
@@ -92,8 +127,10 @@ class TabNetClassifier(pl.LightningModule):
     def training_step(self, batch, batch_idx) -> torch.Tensor:
         loss, logits, preds, labels = self._step(*batch)
 
+        self.log("train/loss", loss, prog_bar=True)
+
         output = self.train_metrics(preds, labels)
-        self.log_dict(output, prog_bar=True, on_step=False, on_epoch=True)
+        self.log_dict(output)
 
         return loss
 
@@ -103,35 +140,88 @@ class TabNetClassifier(pl.LightningModule):
         self.log("val/loss", loss, prog_bar=True)
 
         output = self.val_metrics(preds, labels)
-        self.log_dict(output, prog_bar=True, on_step=False, on_epoch=True)
+        self.log_dict(output, prog_bar=True)
+
+    def test_step(self, batch, batch_id):
+        loss, logits, preds, labels = self._step(*batch)
+
+        self.log("test/loss", loss)
+
+        output = self.test_metrics(preds, labels)
+        self.log_dict(output)
 
     def configure_optimizers(self):
-        no_decay = ["bias", "LayerNorm.weight"]
-
-        optimizer_grouped_parameters = [
-            {
-                "params": [p for n, p in self.named_parameters() if not any(nd in n for nd in no_decay)],
-                "weight_decay": self.weight_decay,
-                "lr": self.lr,
-            },
-            {
-                "params": [p for n, p in self.named_parameters() if any(nd in n for nd in no_decay)],
-                "weight_decay": 0.0,
-                "lr": self.lr,
-            },
-        ]
-
-        optimizer = AdamW(optimizer_grouped_parameters)
+        optimizer = self._configure_optimizer()
 
         if self.scheduler == "linear_with_warmup":
+            if "warmup_steps" not in self.scheduler_params:
+                raise KeyError(f"{self.scheduler_params} is missing warmup_steps - required for scheduler linear_with_warmup")
+
             scheduler = get_linear_schedule_with_warmup(
-                optimizer, num_warmup_steps=self.warmup_steps, num_training_steps=self.total_steps
+                optimizer, num_warmup_steps=self.scheduler_params["warmup_steps"], num_training_steps=self.max_steps
             )
+            scheduler = {"scheduler": scheduler, "interval": "step", "frequency": 1}
+
+            return [optimizer], [scheduler]
+        elif self.scheduler == "step_lr":
+            if "decay_rate" not in self.scheduler_params or "decay_step" not in self.scheduler_params:
+                raise KeyError(f"{self.scheduler_params} is missing decay_rate or decay_step - required for scheduler step_lr")
+
+            scheduler = StepLR(optimizer, step_size=self.scheduler_params["decay_step"], gamma=self.scheduler_params["decay_rate"])
+            scheduler = {"scheduler": scheduler, "interval": "step", "frequency": 1}
+
+            return [optimizer], [scheduler]
+        elif self.scheduler == "exponential_decay":
+            if "decay_rate" not in self.scheduler_params or "decay_step" not in self.scheduler_params:
+                raise KeyError(f"{self.scheduler_params} is missing decay_rate or decay_step - required for scheduler exponential_decay")
+
+            scheduler = get_exponential_decay_scheduler(optimizer, decay_step=self.scheduler_params["decay_step"],
+                                                        decay_rate=self.scheduler_params["decay_rate"])
             scheduler = {"scheduler": scheduler, "interval": "step", "frequency": 1}
 
             return [optimizer], [scheduler]
         else:
             return optimizer
+
+    def _configure_optimizer(self) -> Optimizer:
+        if self.optimizer == "adamw":
+            if not "weight_decay" in self.optimizer_params:
+                raise KeyError(f"{self.optimizer_params} is missing weight_decay - required for adamw")
+
+            # remove decay from bias terms and batch normalization
+            no_decay = ["bias", "bn.weight"]
+
+            optimizer_grouped_parameters = [
+                {
+                    "params": [p for n, p in self.named_parameters() if not any(nd in n for nd in no_decay)],
+                    "weight_decay": self.optimizer_params["weight_decay"],
+                    "lr": self.lr,
+                },
+                {
+                    "params": [p for n, p in self.named_parameters() if any(nd in n for nd in no_decay)],
+                    "weight_decay": 0.0,
+                    "lr": self.lr,
+                },
+            ]
+
+            optimizer = AdamW(optimizer_grouped_parameters)
+
+            return optimizer
+        elif self.optimizer == "adam":
+            optimizer = Adam(self.parameters(), lr=self.lr, betas=(0.9, 0.999), eps=1e-8)
+
+            return optimizer
+        else:
+            raise ValueError(f"optimizer {self.optimizer} is not implemented")
+
+    def setup(self, stage: str) -> None:
+        if stage == "fit":
+            if self.trainer.max_steps:
+                self.max_steps = self.trainer.max_steps
+            else:
+                total_devices = self.trainer.num_gpus * self.trainer.num_nodes
+                train_batches = len(self.train_dataloader()) // total_devices
+                self.max_steps = (self.trainer.max_epochs * train_batches) // self.trainer.accumulate_grad_batches
 
     @staticmethod
     def add_model_specific_args(parent_parser: ArgumentParser) -> ArgumentParser:
