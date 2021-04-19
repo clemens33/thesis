@@ -1,4 +1,6 @@
+
 #%%
+
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning import seed_everything
@@ -9,13 +11,14 @@ from tabnet_lightning import TabNetClassifier
 #%%
 
 seed_everything(1)
+path = "../../"
 
 #%%
 
 dm = CovTypeDataModule(
     batch_size=16384,
     num_workers=8,
-    cache_dir="../../data/uci/covtype/",
+    cache_dir=path + "data/uci/covtype/",
     seed=0,  # use same seed / random state as tabnet original implementation
 )
 
@@ -47,20 +50,24 @@ classifier = TabNetClassifier(
 
     lr=0.02,
     optimizer="adam",
-
     scheduler="exponential_decay",
     scheduler_params={"decay_step": 500, "decay_rate": 0.95},
+
+    #optimizer="adamw",
+    #optimizer_params={"weight_decay": 0.0001},
+    #scheduler="linear_with_warmup",
+    #scheduler_params={"warmup_steps": 0.1},
 )
 
 #%%
 
 lr_monitor = LearningRateMonitor(logging_interval="step")
-trainer = Trainer(default_root_dir="../../logs/covtype/",
+trainer = Trainer(default_root_dir=path + "logs/covtype/",
 
                   gpus=1,
                   # accelerator="none",
 
-                  max_steps=1000000,
+                  max_steps=2000,
 
                   fast_dev_run=False,
                   deterministic=True,
