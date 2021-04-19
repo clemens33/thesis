@@ -1,12 +1,12 @@
 from argparse import ArgumentParser
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Any
 
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from torch.optim import AdamW, Optimizer, Adam
 from torch.optim.lr_scheduler import StepLR
-from torchmetrics import MetricCollection, Accuracy
+from torchmetrics import MetricCollection, Accuracy, AUROC
 
 from tabnet import TabNet
 from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler
@@ -77,7 +77,7 @@ class TabNetClassifier(pl.LightningModule):
 
         metrics = MetricCollection([
             Accuracy(),
-            # AUROC(num_classes=num_classes, average="macro") # TODO check -> leads to memory leak
+            AUROC(num_classes=num_classes, average="macro")  # TODO check -> leads to memory leak (atm fixed by calling reset in epoch end callbacks)
         ])
 
         self.train_metrics = metrics.clone(prefix="train/")
@@ -134,6 +134,9 @@ class TabNetClassifier(pl.LightningModule):
 
         return loss
 
+    def training_epoch_end(self, outputs: List[Any]):
+        self.train_metrics.reset()
+
     def validation_step(self, batch, batch_idx):
         loss, logits, preds, labels = self._step(*batch)
 
@@ -142,6 +145,9 @@ class TabNetClassifier(pl.LightningModule):
         output = self.val_metrics(preds, labels)
         self.log_dict(output, prog_bar=True)
 
+    def validation_epoch_end(self, outputs: List[Any]):
+        self.val_metrics.reset()
+
     def test_step(self, batch, batch_id):
         loss, logits, preds, labels = self._step(*batch)
 
@@ -149,6 +155,9 @@ class TabNetClassifier(pl.LightningModule):
 
         output = self.test_metrics(preds, labels)
         self.log_dict(output)
+
+    def test_epoch_end(self, outputs: List[Any]):
+        self.test_metrics.reset()
 
     def configure_optimizers(self):
         optimizer = self._configure_optimizer()
@@ -214,7 +223,7 @@ class TabNetClassifier(pl.LightningModule):
         else:
             raise ValueError(f"optimizer {self.optimizer} is not implemented")
 
-    def setup(self, stage: str) -> None:
+    def setup(self, stage: Optional[str] = None) -> None:
         if stage == "fit":
             if self.trainer.max_steps:
                 self.max_steps = self.trainer.max_steps
