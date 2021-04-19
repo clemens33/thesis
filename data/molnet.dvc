@@ -1,0 +1,5 @@
+outs:
+- md5: e131ea2c4ea5cb2e3f85f1bf3ed60c00.dir
+  size: 649194
+  nfiles: 5
+  path: molnet
