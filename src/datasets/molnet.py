@@ -51,6 +51,8 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
     _names = ["bace_c", "bbbp", "clintox", "hiv", "muv", "pcba", "pcba_146",
               "pcba_2475", "sider", "tox21", "toxcast"]
 
+    # focus on bbbp, bace_c and tox21
+
     def __init__(self, name: str, batch_size: int, num_workers: int = 4, split: str = "random", seed: int = 5180,
                  cache_dir=str(Path.home()) + "/.cache/molnet/", **kwargs):
         super(MolNetClassifierDataModule, self).__init__()
@@ -71,6 +73,8 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         """create and cache descriptors using morgan fingerprint vectors if not already done/existing"""
         n_bits = self.kwargs["n_bits"]
         radius = self.kwargs["radius"]
+        chirality = self.kwargs["chirality"] if "chirality" in self.kwargs else False
+        features = self.kwargs["features"] if "features" in self.kwargs else False
 
         tasks, all_dataset, transformers = dataset_loading_functions[self.name](featurizer="Raw", splitter=None)
 
@@ -83,7 +87,7 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
 
         pbar = tqdm(all_dataset[0].X)
         for i, mol in enumerate(pbar):
-            fps = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius, nBits=n_bits)  # , useChirality=True, useFeatures=True)
+            fps = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius, nBits=n_bits, useChirality=chirality, useFeatures=features)
             desc_mat[i] = fps
 
         # create cache dir if not existing
@@ -127,7 +131,7 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, pin_memory=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=True)
+        return DataLoader(self.val_dataset, batch_size=len(self.val_dataset), num_workers=self.num_workers, pin_memory=True)
 
     @staticmethod
     def add_data_module_specific_args(parent_parser: ArgumentParser) -> ArgumentParser:
