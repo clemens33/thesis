@@ -1,0 +1,4 @@
+outs:
+- md5: 71df19898bd3e11db15ae0faf4159f2c
+  size: 75169317
+  path: covtype.csv

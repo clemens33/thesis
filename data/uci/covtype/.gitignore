@@ -1,2 +1,6 @@
 /covtype.data
 /covtype.data.gz
+/covtype.csv
+/test_covtype.csv
+/train_covtype.csv
+/val_covtype.csv

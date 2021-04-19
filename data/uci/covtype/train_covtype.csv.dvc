@@ -1,0 +1,4 @@
+outs:
+- md5: 96be7499b2977bbd7e6158d3404ef910
+  size: 40089797
+  path: train_covtype.csv
