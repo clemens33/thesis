@@ -23,7 +23,7 @@ class GhostBatchNorm1d(nn.Module):
 
         """
         # skip for batch size 1 and training
-        if len(input) == 1 and self.training:
+        if (len(input) == 1 and self.training) or self.virtual_batch_size == -1:
             return input
 
         # resize to (batch_size, input_size, sequence_length) - the pytorch default batch norm dimensions for 3 dimensional data

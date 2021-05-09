@@ -109,7 +109,7 @@ class TabNetClassifier(pl.LightningModule):
         self.loss_fn = nn.CrossEntropyLoss(weight=class_weights)
 
         metrics = MetricCollection([
-            Accuracy(),
+            Accuracy(num_classes=num_classes),
             AUROC(num_classes=num_classes, average="macro")
             # TODO check -> leads to memory leak (atm fixed by calling reset in epoch end callbacks)
         ])

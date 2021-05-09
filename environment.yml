@@ -21,9 +21,12 @@ dependencies:
   - pip
   - pip:
       - transformers
-      - pytorch-lightning==1.3.0rc1
-      - torchmetrics==0.3.0rc1
+      - pytorch-lightning
+      - torchmetrics
       - datasets
       - tensorflow~=2.4
       - deepchem
       - wget
+      - mlflow
+      - jsonargparse[signatures] # needed for lightning cli
+      - optuna

@@ -1,4 +1,4 @@
-from argparse import ArgumentParser, Namespace
+from argparse import Namespace
 from pathlib import Path, PurePosixPath
 from typing import Optional, List, Tuple
 
@@ -13,10 +13,6 @@ from scipy.sparse import csr_matrix, save_npz, load_npz
 from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
-
-from rdkit import Chem
-from rdkit.Chem import AllChem
-from sklearn.feature_extraction import DictVectorizer
 
 dataset_loading_functions = {
     "bace_c": deepchem.molnet.load_bace_classification,
@@ -182,9 +178,9 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
             return None
 
     @rank_zero_only
-    def log_hyperparameters(self, logger: LightningLoggerBase, ignore_param: List[str] = None, ignore_type: List = None):
-        if ignore_type is None:
-            ignore_type = [TensorDataset, torch.Tensor, np.ndarray]
+    def log_hyperparameters(self, logger: LightningLoggerBase, ignore_param: List[str] = None, types: List = None):
+        if types is None:
+            types = [int, float, str, dict, list, bool, tuple]
 
         if ignore_param is None:
             ignore_param = ["class_weights"]
@@ -192,25 +188,9 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         params = {}
         for k, v in self.__dict__.items():
             if k not in ignore_param and not k.startswith("_"):
-                if not type(v) in ignore_type:
+                if type(v) in types:
                     params[k] = v
 
         params = Namespace(**params)
 
         logger.log_hyperparams(params)
-
-
-class BBBPClassifierDataModule(MolNetClassifierDataModule):
-    def __init__(self, batch_size: int, seed: int, num_workers: int = 4,
-                 cache_dir=str(Path.home()) + "/.cache/molnet/", use_cache: bool = True, **kwargs):
-        super(BBBPClassifierDataModule, self).__init__(name="bbbp", batch_size=batch_size, num_workers=num_workers, split="random",
-                                                       seed=seed, cache_dir=cache_dir, use_cache=use_cache, **kwargs)
-
-    def setup(self, stage: Optional[str] = None):
-        super().setup(stage)
-
-        # results in final split 8:1:1 for (train, val, test) - as described in Jiang et al. (2020)
-        self.val_dataset, self.test_dataset = train_test_split(self.val_dataset, test_size=.5, random_state=self.seed)
-
-    def test_dataloader(self):
-        return DataLoader(self.test_dataset, batch_size=len(self.test_dataset), num_workers=self.num_workers, pin_memory=True)

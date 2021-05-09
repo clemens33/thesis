@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Callable
 
 import torch
 import torch.nn as nn
@@ -15,7 +15,7 @@ class Step(nn.Module):
                  nr_layers: int = 1,
                  shared_layers: Optional[List[Layer]] = None,
                  gamma: float = 1.0,
-                 decision_activation: nn.Module = nn.ReLU(),
+                 decision_activation: Callable = nn.ReLU(),
                  **kwargs):
         super(Step, self).__init__()
 
