@@ -8,6 +8,8 @@ from torch.optim import AdamW, Optimizer, Adam
 from torch.optim.lr_scheduler import StepLR
 from torchmetrics import MetricCollection, Accuracy, AUROC
 
+from sklearn.metrics import roc_auc_score
+
 from tabnet import TabNet
 from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler
 
@@ -22,11 +24,13 @@ class TabNetClassifier(pl.LightningModule):
                  nr_shared_layers: int = 1,
                  nr_steps: int = 1,
                  gamma: float = 1.0,
-                 eps: float = 1e-5,
+                 #
                  momentum: float = 0.01,
                  virtual_batch_size: int = 8,
+                 normalize_input: bool = True,
                  #
                  lambda_sparse: float = 1e-4,
+                 eps: float = 1e-5,
                  #
                  categorical_indices: Optional[List[int]] = None,
                  categorical_size: Optional[List[int]] = None,
@@ -42,6 +46,34 @@ class TabNetClassifier(pl.LightningModule):
                  #
                  **kwargs
                  ):
+        """
+        tabnet lightning classifier init function
+
+        Args:
+            input_size:  input feature size/dimensions
+            feature_size: feature/hidden size
+            decision_size: decision/encoder size - output of tabnet before applying any specific task
+            num_classes: output size/number of possible output classes
+            nr_layers:  number of independent layers per feature transformer
+            nr_shared_layers: number of shared layers over all feature transformer
+            nr_steps: number of tabnet steps
+            gamma: gamma/relaxation parameter, larger values mean more relaxed, behavior to reuse input features over subsequent steps
+            momentum: momentum for batch normalization
+            virtual_batch_size: virtual batch size for ghost batch norm - if set to -1 no batch norm is applied in intermediate layers
+            normalize_input: if batch norm is applied on input features
+            lambda_sparse: sparsity regularization
+            eps: for numerical stability calculating entropy used in regularization
+            categorical_indices: which indices in the input features applies to categorical variables
+            categorical_size: each categorical variables size
+            embedding_dims: embedding dimension for each categorical variable
+            lr: learning rate
+            optimizer: optimizer name
+            optimizer_params: optimizer params
+            scheduler: scheduler name
+            scheduler_params: scheduler params
+            class_weights: optional class weights
+            **kwargs: optional tabnet parameters
+        """
         super(TabNetClassifier, self).__init__()
 
         self.lambda_sparse = lambda_sparse
@@ -68,6 +100,7 @@ class TabNetClassifier(pl.LightningModule):
                               eps=eps,
                               momentum=momentum,
                               virtual_batch_size=virtual_batch_size,
+                              normalize_input=normalize_input,
                               **kwargs)
 
         self.classifier = nn.Linear(in_features=decision_size, out_features=num_classes)
@@ -77,7 +110,8 @@ class TabNetClassifier(pl.LightningModule):
 
         metrics = MetricCollection([
             Accuracy(),
-            AUROC(num_classes=num_classes, average="macro")  # TODO check -> leads to memory leak (atm fixed by calling reset in epoch end callbacks)
+            AUROC(num_classes=num_classes, average="macro")
+            # TODO check -> leads to memory leak (atm fixed by calling reset in epoch end callbacks)
         ])
 
         self.train_metrics = metrics.clone(prefix="train/")
