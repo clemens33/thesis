@@ -1,16 +1,22 @@
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from pathlib import Path, PurePosixPath
-from typing import Optional
+from typing import Optional, List, Tuple
 
 import deepchem
 import numpy as np
 import pytorch_lightning as pl
 import torch
+from pytorch_lightning.loggers import LightningLoggerBase
+from pytorch_lightning.utilities import rank_zero_only
 from rdkit.Chem import AllChem
 from scipy.sparse import csr_matrix, save_npz, load_npz
 from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
+
+from rdkit import Chem
+from rdkit.Chem import AllChem
+from sklearn.feature_extraction import DictVectorizer
 
 dataset_loading_functions = {
     "bace_c": deepchem.molnet.load_bace_classification,
@@ -53,20 +59,44 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
 
     # focus on bbbp, bace_c and tox21
 
-    def __init__(self, name: str, batch_size: int, num_workers: int = 4, split: str = "random", seed: int = 5180,
-                 cache_dir=str(Path.home()) + "/.cache/molnet/", **kwargs):
+    def __init__(self, name: str,
+                 batch_size: int,
+                 num_workers: int = 4,
+                 split: str = "random",
+                 split_size: Tuple[float, float, float] = (0.8, 0.1, 0.1),
+                 seed: int = 5180,
+                 cache_dir=str(Path.home()) + "/.cache/molnet/",
+                 use_cache: bool = True, **kwargs):
+        """
+
+        Args:
+            name: molnet dataset name
+            batch_size: training batch size
+            num_workers: num workers used for data loaders
+            split: type of split
+            split_size: split size
+            seed: seed used for splitting
+            cache_dir: cache directory
+            use_cache: whether to use cache or not
+            **kwargs: featurizer params - includes n_bits, radius, chirality, features
+        """
         super(MolNetClassifierDataModule, self).__init__()
 
         assert name in MolNetClassifierDataModule._names, f"dataset {name} not in {MolNetClassifierDataModule._names}"
+        assert sum(split_size) <= 1.0, f"split sizes must sum up to 1.0"
+        assert split_size[0] > 0.0, f"train split size must sum greater than 0.0"
 
         self.name = name
         self.split = split
+        self.split_size = split_size
         self.seed = seed
 
         self.batch_size = batch_size
         self.num_workers = num_workers
 
         self.cache_dir = cache_dir
+        self.use_cache = use_cache
+
         self.kwargs = kwargs
 
     def prepare_data(self):
@@ -76,11 +106,12 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         chirality = self.kwargs["chirality"] if "chirality" in self.kwargs else False
         features = self.kwargs["features"] if "features" in self.kwargs else False
 
-        tasks, all_dataset, transformers = dataset_loading_functions[self.name](featurizer="Raw", splitter=None)
+        tasks, all_dataset, transformers = dataset_loading_functions[self.name](featurizer="Raw", splitter=None, data_dir=self.cache_dir,
+                                                                                reload=self.use_cache)
 
-        cached_descriptors = self.cache_dir + self.name + "_ecfp" + f"_radius{str(radius)}" + f"_n_bits{str(n_bits)}" + ".npz"
+        cached_descriptors = self.cache_dir + self.name + "_ecfp" + f"_radius{str(radius)}" + f"_n_bits{str(n_bits)}" + f"_chirality{str(chirality)}" + f"_features{str(features)}" + ".npz"
 
-        if Path(PurePosixPath(cached_descriptors)).exists():
+        if Path(PurePosixPath(cached_descriptors)).exists() and self.use_cache:
             return
 
         desc_mat = np.zeros((len(all_dataset[0].X), n_bits))
@@ -99,11 +130,14 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
     def setup(self, stage: Optional[str] = None):
         n_bits = self.kwargs["n_bits"]
         radius = self.kwargs["radius"]
+        chirality = self.kwargs["chirality"] if "chirality" in self.kwargs else False
+        features = self.kwargs["features"] if "features" in self.kwargs else False
 
-        tasks, all_dataset, transformers = dataset_loading_functions[self.name](featurizer="Raw", splitter=None)
+        tasks, all_dataset, transformers = dataset_loading_functions[self.name](featurizer="Raw", splitter=None, data_dir=self.cache_dir,
+                                                                                reload=self.use_cache)
 
         # load descriptors
-        cached_descriptors = self.cache_dir + self.name + "_ecfp" + f"_radius{str(radius)}" + f"_n_bits{str(n_bits)}" + ".npz"
+        cached_descriptors = self.cache_dir + self.name + "_ecfp" + f"_radius{str(radius)}" + f"_n_bits{str(n_bits)}" + f"_chirality{str(chirality)}" + f"_features{str(features)}" + ".npz"
         sparse_desc_mat = load_npz(cached_descriptors)
 
         X = sparse_desc_mat.toarray()
@@ -121,11 +155,19 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         self.classes = self.classes[sorted_indices]
         self.class_weights = self.class_weights[sorted_indices].tolist() if self.class_weights is not None else None
 
-        # split and create dataset
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=.2, random_state=self.seed,
+        # default split and create dataset
+
+        test_size = sum(self.split_size[1:])
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=test_size, random_state=self.seed,
                                                           stratify=self.classes if self.split == "stratified" else None)
+
+        test_size = self.split_size[-1] / test_size
+        X_val, X_test, y_val, y_test = train_test_split(X_val, y_val, test_size=test_size, random_state=self.seed,
+                                                        stratify=self.classes if self.split == "stratified" else None)
+
         self.train_dataset = TensorDataset(torch.from_numpy(X_train).float(), torch.from_numpy(y_train).long().squeeze())
         self.val_dataset = TensorDataset(torch.from_numpy(X_val).float(), torch.from_numpy(y_val).long().squeeze())
+        self.test_dataset = TensorDataset(torch.from_numpy(X_test).float(), torch.from_numpy(y_test).long().squeeze())
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, pin_memory=True)
@@ -133,11 +175,42 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         return DataLoader(self.val_dataset, batch_size=len(self.val_dataset), num_workers=self.num_workers, pin_memory=True)
 
-    @staticmethod
-    def add_data_module_specific_args(parent_parser: ArgumentParser) -> ArgumentParser:
-        def add_model_specific_args(parent_parser):
-            parser = parent_parser.add_argument_group("MolNetClassifierDataModule")
+    def test_dataloader(self):
+        if len(self.test_dataset) > 0:
+            return DataLoader(self.test_dataset, batch_size=len(self.test_dataset), num_workers=self.num_workers, pin_memory=True)
+        else:
+            return None
 
-            # TODO
+    @rank_zero_only
+    def log_hyperparameters(self, logger: LightningLoggerBase, ignore_param: List[str] = None, ignore_type: List = None):
+        if ignore_type is None:
+            ignore_type = [TensorDataset, torch.Tensor, np.ndarray]
 
-            return parser
+        if ignore_param is None:
+            ignore_param = ["class_weights"]
+
+        params = {}
+        for k, v in self.__dict__.items():
+            if k not in ignore_param and not k.startswith("_"):
+                if not type(v) in ignore_type:
+                    params[k] = v
+
+        params = Namespace(**params)
+
+        logger.log_hyperparams(params)
+
+
+class BBBPClassifierDataModule(MolNetClassifierDataModule):
+    def __init__(self, batch_size: int, seed: int, num_workers: int = 4,
+                 cache_dir=str(Path.home()) + "/.cache/molnet/", use_cache: bool = True, **kwargs):
+        super(BBBPClassifierDataModule, self).__init__(name="bbbp", batch_size=batch_size, num_workers=num_workers, split="random",
+                                                       seed=seed, cache_dir=cache_dir, use_cache=use_cache, **kwargs)
+
+    def setup(self, stage: Optional[str] = None):
+        super().setup(stage)
+
+        # results in final split 8:1:1 for (train, val, test) - as described in Jiang et al. (2020)
+        self.val_dataset, self.test_dataset = train_test_split(self.val_dataset, test_size=.5, random_state=self.seed)
+
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset, batch_size=len(self.test_dataset), num_workers=self.num_workers, pin_memory=True)
