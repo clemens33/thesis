@@ -19,6 +19,7 @@ class TabNet(nn.Module):
                  gamma: float = 1.0,
                  eps: float = 1e-5,
                  momentum: float = 0.1,
+                 normalize_input: bool = True,
                  **kwargs
                  ):
         super(TabNet, self).__init__()
@@ -35,8 +36,12 @@ class TabNet(nn.Module):
                 FeatureLayer.init_layer(input_size=feature_size, feature_size=feature_size, **kwargs)
                 for _ in range(1, nr_shared_layers)]
 
-        # use ghost batch norm with large virtual batch size - this applies the custom default batch normalization supporting 3D inputs
-        self.bn = GhostBatchNorm1d(input_size=input_size, momentum=momentum, virtual_batch_size=torch.iinfo(int).max)
+        if normalize_input:
+            # use ghost batch norm with large virtual batch size - this applies the custom default batch normalization supporting 3D inputs
+            self.bn = GhostBatchNorm1d(input_size=input_size, momentum=momentum, virtual_batch_size=torch.iinfo(int).max)
+        else:
+            self.bn = nn.Identity()
+
         self.feature_transformer = FeatureTransformer(input_size=input_size, feature_size=feature_size, nr_layers=nr_layers,
                                                       shared_layers=shared_layers, momentum=momentum, **kwargs)
 
