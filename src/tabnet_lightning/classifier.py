@@ -265,22 +265,3 @@ class TabNetClassifier(pl.LightningModule):
                 total_devices = self.trainer.num_gpus * self.trainer.num_nodes
                 train_batches = len(self.train_dataloader()) // total_devices
                 self.max_steps = (self.trainer.max_epochs * train_batches) // self.trainer.accumulate_grad_batches
-
-    @staticmethod
-    def add_model_specific_args(parent_parser: ArgumentParser) -> ArgumentParser:
-        parser = parent_parser.add_argument_group("TabNetClassifier")
-
-        parser.add_argument("--input_size", type=int, help="input feature size/dimensions")
-        parser.add_argument("--feature_size", type=int, help="feature/hidden size")
-        parser.add_argument("--decision_size", type=int, help="decision/encoder size - output of tabnet before applying any specific task")
-        parser.add_argument("--num_classes", type=int, help="output size/number of possible output classes")
-        parser.add_argument("--nr_layers", type=int, default=1, help="number of independent layers per feature transformer")
-        parser.add_argument("--nr_shared_layers", type=int, default=1, help="number of shared layers over all feature transformer")
-        parser.add_argument("--nr_steps", type=int, default=1, help="number of tabnet steps")
-        parser.add_argument("--gamma", type=float, default=1.0, help="gamma/relaxation parameter, larger values mean more relaxed "
-                                                                     "behavior to reuse input features over subsequent steps")
-        parser.add_argument("--eps", type=float, default=1e-5, help="for numerical stability calculating entropy used in regularization")
-        parser.add_argument("--momentum", type=float, default=0.1, help="momentum for batch normalization")
-        parser.add_argument("--virtual_batch_size", type=int, default=8, help="virtual batch size for ghost batch norm")
-
-        return parent_parser
