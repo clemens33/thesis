@@ -1,38 +1,41 @@
-import torch
+import optuna
 
+from optuna.integration import PyTorchLightningPruningCallback
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, EarlyStopping
 from pytorch_lightning.loggers import MLFlowLogger
 
 from datasets import MolNetClassifierDataModule
-from tabnet_lightning import TabNetClassifier, TabNetTrainer
+from tabnet_lightning import TabNetTrainer, TabNetClassifier
+
+SEED = 123456789
+BATCH_SIZE = 256
+MAX_STEPS = 2000
 
 
-def main():
-    seed = 1
-
+def objective(trial: optuna.trial.Trial) -> float:
     mlf_logger = MLFlowLogger(
-        experiment_name="bbbp7",
+        experiment_name="bbbp_optuna4",
         tracking_uri="https://mlflow.kriechbaumer.at"
     )
 
     exp = mlf_logger.experiment
-    mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="seed", value=seed)
+    mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="seed", value=SEED)
 
-    seed_everything(seed)
+    seed_everything(SEED)
     path = "../../../"
 
     dm = MolNetClassifierDataModule(
         name="bbbp",
-        batch_size=128,
-        seed=seed,
+        batch_size=BATCH_SIZE,
+        seed=SEED,
         split="random",
         split_size=(0.8, 0.1, 0.1),
         radius=6,
         n_bits=4096,
         chirality=True,
         features=True,
-        num_workers=8, # 0 for debugging
+        num_workers=8,  # 0 for debugging
         cache_dir=path + "data/molnet/bbbp/",
         use_cache=True
     )
@@ -42,15 +45,24 @@ def main():
 
     dm.log_hyperparameters(mlf_logger)
 
+    # parameter search space
+    decision_size = trial.suggest_int("decision_size", 8, 64)
+    #nr_layers = trial.suggest_int("nr_layers", 0, 4)
+    #nr_shared_layers = trial.suggest_int("nr_shared_layers", 1, 2)
+    nr_steps = trial.suggest_int("nr_steps", 1, 100)
+    gamma = trial.suggest_float("gamma", 1.0, 5.0, step=0.2)
+    lambda_sparse = trial.suggest_categorical("lambda_sparse", [0, 1e-6, 1e-4, 1e-3, 0.01, 0.1])
+    lr = trial.suggest_float("lr", 1e-6, 0.01, log=True)
+
     classifier = TabNetClassifier(
         input_size=dm.input_size,
-        feature_size=64,
-        decision_size=32,
+        feature_size=decision_size * 2,
+        decision_size=decision_size,
         num_classes=len(dm.classes),
         nr_layers=2,
         nr_shared_layers=2,
-        nr_steps=14,
-        gamma=3.0,
+        nr_steps=nr_steps,
+        gamma=gamma,
 
         # pytorch batch norm uses 1 - momentum (e.g. 0.3 pytorch is the same as tf 0.7)
         # momentum=0.01,
@@ -60,14 +72,14 @@ def main():
 
         # decision_activation=torch.tanh,
 
-        lambda_sparse=0.00,
+        lambda_sparse=lambda_sparse,
 
         # define embeddings for categorical variables - otherwise raw value is used
         # categorical_indices=list(range(dm.input_size)),
         # categorical_size=[2] * dm.input_size,
         # embedding_dims=[1] * dm.input_size,
 
-        lr=0.01,
+        lr=lr,
         # optimizer="adam",
         # scheduler="exponential_decay",
         # scheduler_params={"decay_step": 100, "decay_rate": 0.95},
@@ -79,10 +91,13 @@ def main():
 
         class_weights=dm.class_weights,
     )
-    mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="trainable_parameters", value=sum(p.numel() for p in classifier.parameters() if p.requires_grad))
+    mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="trainable_parameters",
+                                    value=sum(p.numel() for p in classifier.parameters() if p.requires_grad))
 
-
+    early_stopping = EarlyStopping(monitor="val/loss", patience=2)
     lr_monitor = LearningRateMonitor(logging_interval="step")
+    optuna_pruner = PyTorchLightningPruningCallback(trial, monitor="val/AUROC")
+
     trainer = TabNetTrainer(
         # default_root_dir=path + "logs/molnet/bbbp2/",
 
@@ -90,9 +105,9 @@ def main():
         checkpoint_callback=False,
         # accelerator="ddp",
 
-        max_steps=500,
-        # max_epochs=300,
-        check_val_every_n_epoch=2,
+        max_steps=MAX_STEPS,
+        # max_epochs=MAX_STEPS,
+        check_val_every_n_epoch=1,
         num_sanity_val_steps=-1,
 
         fast_dev_run=False,
@@ -102,7 +117,7 @@ def main():
         # gradient_clip_algorithm="value",
         # gradient_clip_val=2,
 
-        callbacks=[lr_monitor],
+        callbacks=[lr_monitor, early_stopping, optuna_pruner],
         logger=mlf_logger
     )
     trainer.log_hyperparameters(mlf_logger)
@@ -111,6 +126,12 @@ def main():
 
     trainer.test(model=classifier, datamodule=dm)
 
+    return trainer.callback_metrics["val/AUROC"].item()
 
-if __name__ == "__main__":
-    main()
+
+if __name__ == '__main__':
+    #pruner = optuna.pruners.SuccessiveHalvingPruner()
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=3, interval_steps=1)
+
+    study = optuna.create_study(direction="maximize", pruner=pruner)
+    study.optimize(objective, n_trials=100, timeout=3600 * 2, catch=(ValueError, ))
