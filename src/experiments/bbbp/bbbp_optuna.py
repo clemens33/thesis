@@ -8,14 +8,14 @@ from pytorch_lightning.loggers import MLFlowLogger
 from datasets import MolNetClassifierDataModule
 from tabnet_lightning import TabNetTrainer, TabNetClassifier
 
-SEED = 123456789
-BATCH_SIZE = 256
+SEED = 987654321
+#BATCH_SIZE = 256
 MAX_STEPS = 2000
 
 
 def objective(trial: optuna.trial.Trial) -> float:
     mlf_logger = MLFlowLogger(
-        experiment_name="bbbp_optuna4",
+        experiment_name="bbbp_optuna6",
         tracking_uri="https://mlflow.kriechbaumer.at"
     )
 
@@ -25,9 +25,11 @@ def objective(trial: optuna.trial.Trial) -> float:
     seed_everything(SEED)
     path = "../../../"
 
+    batch_size = trial.suggest_categorical("batch_size", [128, 256, 512, 1024, 2048])
+
     dm = MolNetClassifierDataModule(
         name="bbbp",
-        batch_size=BATCH_SIZE,
+        batch_size=batch_size,
         seed=SEED,
         split="random",
         split_size=(0.8, 0.1, 0.1),
@@ -46,13 +48,22 @@ def objective(trial: optuna.trial.Trial) -> float:
     dm.log_hyperparameters(mlf_logger)
 
     # parameter search space
-    decision_size = trial.suggest_int("decision_size", 8, 64)
-    #nr_layers = trial.suggest_int("nr_layers", 0, 4)
-    #nr_shared_layers = trial.suggest_int("nr_shared_layers", 1, 2)
-    nr_steps = trial.suggest_int("nr_steps", 1, 100)
-    gamma = trial.suggest_float("gamma", 1.0, 5.0, step=0.2)
+    # decision_size = trial.suggest_int("decision_size", 8, 64)
+    # nr_layers = trial.suggest_int("nr_layers", 0, 4)
+    # nr_shared_layers = trial.suggest_int("nr_shared_layers", 1, 2)
+    # nr_steps = trial.suggest_int("nr_steps", 1, 100)
+    # gamma = trial.suggest_float("gamma", 1.0, 5.0, step=0.2)
+    # lambda_sparse = trial.suggest_categorical("lambda_sparse", [0, 1e-6, 1e-4, 1e-3, 0.01, 0.1])
+    # lr = trial.suggest_float("lr", 1e-6, 0.01, log=True)
+
+    decision_size = trial.suggest_categorical("decision_size", [8, 16, 24, 32, 64, 128])
+    nr_steps = trial.suggest_categorical("nr_steps", [3, 4, 5, 6, 7, 8, 9, 10])
+    gamma = trial.suggest_categorical("gamma", [1.0, 1.2, 1.5, 2.0])
     lambda_sparse = trial.suggest_categorical("lambda_sparse", [0, 1e-6, 1e-4, 1e-3, 0.01, 0.1])
-    lr = trial.suggest_float("lr", 1e-6, 0.01, log=True)
+
+    lr = trial.suggest_categorical("lr", [0.005, 0.01, 0.02, 0.025])
+    decay_step = trial.suggest_categorical("decay_step", [500, 2000, 8000, 10000])
+    decay_rate = trial.suggest_categorical("decay_rate", [0.4, 0.8, 0.9, 0.95])
 
     classifier = TabNetClassifier(
         input_size=dm.input_size,
@@ -80,21 +91,21 @@ def objective(trial: optuna.trial.Trial) -> float:
         # embedding_dims=[1] * dm.input_size,
 
         lr=lr,
-        # optimizer="adam",
-        # scheduler="exponential_decay",
-        # scheduler_params={"decay_step": 100, "decay_rate": 0.95},
+        optimizer="adam",
+        scheduler="exponential_decay",
+        scheduler_params={"decay_step": decay_step, "decay_rate": decay_rate},
 
-        optimizer="adamw",
-        optimizer_params={"weight_decay": 0.0001},
-        scheduler="linear_with_warmup",
-        scheduler_params={"warmup_steps": 0.1},
+        #optimizer="adamw",
+        #optimizer_params={"weight_decay": 0.0001},
+        #scheduler="linear_with_warmup",
+        #scheduler_params={"warmup_steps": 0.1},
 
         class_weights=dm.class_weights,
     )
     mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="trainable_parameters",
                                     value=sum(p.numel() for p in classifier.parameters() if p.requires_grad))
 
-    early_stopping = EarlyStopping(monitor="val/loss", patience=2)
+    #early_stopping = EarlyStopping(monitor="val/loss", patience=3)
     lr_monitor = LearningRateMonitor(logging_interval="step")
     optuna_pruner = PyTorchLightningPruningCallback(trial, monitor="val/AUROC")
 
@@ -117,7 +128,8 @@ def objective(trial: optuna.trial.Trial) -> float:
         # gradient_clip_algorithm="value",
         # gradient_clip_val=2,
 
-        callbacks=[lr_monitor, early_stopping, optuna_pruner],
+        #callbacks=[lr_monitor, early_stopping, optuna_pruner],
+        callbacks=[lr_monitor, optuna_pruner],
         logger=mlf_logger
     )
     trainer.log_hyperparameters(mlf_logger)
@@ -131,7 +143,7 @@ def objective(trial: optuna.trial.Trial) -> float:
 
 if __name__ == '__main__':
     #pruner = optuna.pruners.SuccessiveHalvingPruner()
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=3, interval_steps=1)
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=10, interval_steps=1)
 
     study = optuna.create_study(direction="maximize", pruner=pruner)
     study.optimize(objective, n_trials=100, timeout=3600 * 2, catch=(ValueError, ))
