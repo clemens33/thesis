@@ -15,7 +15,7 @@ MAX_STEPS = 2000
 
 def objective(trial: optuna.trial.Trial) -> float:
     mlf_logger = MLFlowLogger(
-        experiment_name="bbbp_optuna6",
+        experiment_name="bbbp_optuna7",
         tracking_uri="https://mlflow.kriechbaumer.at"
     )
 
@@ -62,7 +62,7 @@ def objective(trial: optuna.trial.Trial) -> float:
     lambda_sparse = trial.suggest_categorical("lambda_sparse", [0, 1e-6, 1e-4, 1e-3, 0.01, 0.1])
 
     lr = trial.suggest_categorical("lr", [0.005, 0.01, 0.02, 0.025])
-    decay_step = trial.suggest_categorical("decay_step", [500, 2000, 8000, 10000])
+    decay_step = trial.suggest_categorical("decay_step", [5, 20, 80, 100])
     decay_rate = trial.suggest_categorical("decay_rate", [0.4, 0.8, 0.9, 0.95])
 
     classifier = TabNetClassifier(
@@ -105,7 +105,7 @@ def objective(trial: optuna.trial.Trial) -> float:
     mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="trainable_parameters",
                                     value=sum(p.numel() for p in classifier.parameters() if p.requires_grad))
 
-    #early_stopping = EarlyStopping(monitor="val/loss", patience=3)
+    early_stopping = EarlyStopping(monitor="val/AUROC", patience=20, mode="max")
     lr_monitor = LearningRateMonitor(logging_interval="step")
     optuna_pruner = PyTorchLightningPruningCallback(trial, monitor="val/AUROC")
 
@@ -128,8 +128,8 @@ def objective(trial: optuna.trial.Trial) -> float:
         # gradient_clip_algorithm="value",
         # gradient_clip_val=2,
 
-        #callbacks=[lr_monitor, early_stopping, optuna_pruner],
-        callbacks=[lr_monitor, optuna_pruner],
+        callbacks=[lr_monitor, early_stopping, optuna_pruner],
+        #callbacks=[lr_monitor, optuna_pruner],
         logger=mlf_logger
     )
     trainer.log_hyperparameters(mlf_logger)
