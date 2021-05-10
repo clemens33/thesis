@@ -1,4 +1,3 @@
-from argparse import ArgumentParser
 from typing import Tuple, Optional, List, Any
 
 import pytorch_lightning as pl
@@ -7,8 +6,6 @@ import torch.nn as nn
 from torch.optim import AdamW, Optimizer, Adam
 from torch.optim.lr_scheduler import StepLR
 from torchmetrics import MetricCollection, Accuracy, AUROC
-
-from sklearn.metrics import roc_auc_score
 
 from tabnet import TabNet
 from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler
@@ -76,6 +73,7 @@ class TabNetClassifier(pl.LightningModule):
         """
         super(TabNetClassifier, self).__init__()
 
+        self.num_classes = num_classes
         self.lambda_sparse = lambda_sparse
 
         self.lr = lr
@@ -103,14 +101,24 @@ class TabNetClassifier(pl.LightningModule):
                               normalize_input=normalize_input,
                               **kwargs)
 
-        self.classifier = nn.Linear(in_features=decision_size, out_features=num_classes)
+        if num_classes == 2:
+            self.classifier = nn.Linear(in_features=decision_size, out_features=1)
+        else:
+            self.classifier = nn.Linear(in_features=decision_size, out_features=num_classes)
 
         class_weights = torch.Tensor(class_weights) if class_weights is not None else None
-        self.loss_fn = nn.CrossEntropyLoss(weight=class_weights)
+
+        if num_classes == 2:
+            pos_weight = class_weights[1] / class_weights.sum() if class_weights is not None else None
+            self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        else:
+            self.loss_fn = nn.CrossEntropyLoss(weight=class_weights)
 
         metrics = MetricCollection([
-            Accuracy(num_classes=num_classes),
-            AUROC(num_classes=num_classes, average="macro")
+            # Accuracy(num_classes=num_classes),
+            # AUROC(num_classes=num_classes, average="macro"),
+            Accuracy(),
+            AUROC(average="macro"),
             # TODO check -> leads to memory leak (atm fixed by calling reset in epoch end callbacks)
         ])
 
@@ -151,19 +159,24 @@ class TabNetClassifier(pl.LightningModule):
 
     def _step(self, inputs: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         logits, mask, entropy = self(inputs)
-        preds = torch.softmax(logits, dim=-1)
 
-        loss = self.loss_fn(logits, labels)
+        if self.num_classes == 2:
+            logits = logits.squeeze()
+            probs = torch.sigmoid(logits)
+        else:
+            probs = torch.softmax(logits, dim=-1)
+
+        loss = self.loss_fn(logits, labels.float() if self.num_classes == 2 else labels)
         loss = loss + entropy * self.lambda_sparse
 
-        return loss, logits, preds, labels
+        return loss, logits, probs, labels
 
     def training_step(self, batch, batch_idx) -> torch.Tensor:
-        loss, logits, preds, labels = self._step(*batch)
+        loss, logits, probs, labels = self._step(*batch)
 
         self.log("train/loss", loss, prog_bar=True)
 
-        output = self.train_metrics(preds, labels)
+        output = self.train_metrics(probs, labels)
         self.log_dict(output)
 
         return loss
@@ -172,22 +185,22 @@ class TabNetClassifier(pl.LightningModule):
         self.train_metrics.reset()
 
     def validation_step(self, batch, batch_idx):
-        loss, logits, preds, labels = self._step(*batch)
+        loss, logits, probs, labels = self._step(*batch)
 
         self.log("val/loss", loss, prog_bar=True)
 
-        output = self.val_metrics(preds, labels)
+        output = self.val_metrics(probs, labels)
         self.log_dict(output, prog_bar=True)
 
     def validation_epoch_end(self, outputs: List[Any]):
         self.val_metrics.reset()
 
     def test_step(self, batch, batch_id):
-        loss, logits, preds, labels = self._step(*batch)
+        loss, logits, probs, labels = self._step(*batch)
 
         self.log("test/loss", loss)
 
-        output = self.test_metrics(preds, labels)
+        output = self.test_metrics(probs, labels)
         self.log_dict(output)
 
     def test_epoch_end(self, outputs: List[Any]):
