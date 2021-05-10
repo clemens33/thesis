@@ -30,3 +30,4 @@ dependencies:
       - mlflow
       - jsonargparse[signatures] # needed for lightning cli
       - optuna
+      - ax-platform
