@@ -1,141 +1,107 @@
+import sys
+from argparse import Namespace, ArgumentParser
 from typing import Dict
 
 from ax import Models
 from ax.modelbridge.generation_strategy import GenerationStrategy, GenerationStep
 from ax.service.managed_loop import optimize
+
 from pytorch_lightning import seed_everything
-from pytorch_lightning.callbacks import LearningRateMonitor, EarlyStopping
-from pytorch_lightning.loggers import MLFlowLogger
 
-from datasets import MolNetClassifierDataModule
-from tabnet_lightning import TabNetTrainer, TabNetClassifier
-
-SEED = 1234
-# BATCH_SIZE = 256
-MAX_STEPS = 1000
+from bbbp_tn import train_tn
 
 
 def train_evaluate(parameterization: Dict):
-    mlf_logger = MLFlowLogger(
-        experiment_name="bbbp_ax6",
-        tracking_uri="https://mlflow.kriechbaumer.at"
+    args = global_args
+
+    # overwrite all arguments by the search space
+    for key, value in parameterization.items():
+        if key != "args":
+            setattr(args, key, value)
+
+    args.feature_size = args.decision_size * 2
+    results_val, *_ = train_tn(args)
+
+    # metric = trainer.callback_metrics["val/AUROC"].item()
+    metric = results_val[0]["val/AUROC"]
+
+    return metric
+
+
+def ax_optimize(args: Namespace):
+    global global_args  # TODO find better solution than a global variable
+    global_args = args
+
+    generation_strategy = GenerationStrategy(name="Sobol+GPEI",
+                                             steps=[
+                                                 GenerationStep(model=Models.SOBOL, num_trials=5),
+                                                 GenerationStep(model=Models.GPEI, num_trials=-1)]
+                                             )
+
+    best_parameters, values, experiment, model = optimize(
+        parameters=args.search_space,
+        total_trials=args.trials,
+        random_seed=args.seed_init,
+        evaluation_function=train_evaluate,
+        objective_name="val/AUROC",
+        minimize=False,
+        generation_strategy=generation_strategy
     )
 
-    exp = mlf_logger.experiment
-    mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="seed", value=SEED)
-
-    seed_everything(SEED)
-    path = "../../../"
-
-    batch_size = parameterization["batch_size"]
-
-    dm = MolNetClassifierDataModule(
-        name="bbbp",
-        batch_size=batch_size,
-        seed=SEED,
-        split="random",
-        split_size=(0.8, 0.1, 0.1),
-        radius=6,
-        n_bits=4096,
-        chirality=True,
-        features=True,
-        num_workers=8,  # 0 for debugging
-        cache_dir=path + "data/molnet/bbbp/",
-        use_cache=True
-    )
-
-    dm.prepare_data()
-    dm.setup()
-
-    dm.log_hyperparameters(mlf_logger)
-
-    decision_size = parameterization["decision_size"]
-    nr_steps = parameterization["nr_steps"]
-    gamma = parameterization["gamma"]
-    lambda_sparse = parameterization["lambda_sparse"]
-
-    lr = parameterization["lr"]
-    #decay_step = parameterization["decay_step"]
-    #decay_rate = parameterization["decay_rate"]
-
-    classifier = TabNetClassifier(
-        input_size=dm.input_size,
-        feature_size=decision_size * 2,
-        decision_size=decision_size,
-        num_classes=len(dm.classes),
-        nr_layers=2,
-        nr_shared_layers=2,
-        nr_steps=nr_steps,
-        gamma=gamma,
-
-        # pytorch batch norm uses 1 - momentum (e.g. 0.3 pytorch is the same as tf 0.7)
-        # momentum=0.01,
-        virtual_batch_size=-1,  # -1 do not use any batch normalization
-        # virtual_batch_size=32,
-        normalize_input=False,
-
-        # decision_activation=torch.tanh,
-
-        lambda_sparse=lambda_sparse,
-
-        # define embeddings for categorical variables - otherwise raw value is used
-        # categorical_indices=list(range(dm.input_size)),
-        # categorical_size=[2] * dm.input_size,
-        # embedding_dims=[1] * dm.input_size,
-
-        lr=lr,
-        optimizer="adam",
-        # scheduler="exponential_decay",
-        # scheduler_params={"decay_step": decay_step, "decay_rate": decay_rate},
-
-        #optimizer="adamw",
-        #optimizer_params={"weight_decay": 0.0001},
-        scheduler="linear_with_warmup",
-        # scheduler_params={"warmup_steps": 0.1},
-        scheduler_params={"warmup_steps": 10},
-
-        class_weights=dm.class_weights,
-    )
-    mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="trainable_parameters",
-                                    value=sum(p.numel() for p in classifier.parameters() if p.requires_grad))
-
-    early_stopping = EarlyStopping(monitor="val/AUROC", patience=3, mode="max")
-    lr_monitor = LearningRateMonitor(logging_interval="step")
-
-    trainer = TabNetTrainer(
-        # default_root_dir=path + "logs/molnet/bbbp2/",
-
-        gpus=1,
-        checkpoint_callback=False,
-        # accelerator="ddp",
-
-        max_steps=MAX_STEPS,
-        # max_epochs=MAX_STEPS,
-        check_val_every_n_epoch=1,
-        num_sanity_val_steps=-1,
-
-        fast_dev_run=False,
-        deterministic=True,
-        # precision=16,
-
-        # gradient_clip_algorithm="value",
-        # gradient_clip_val=2,
-
-        callbacks=[lr_monitor, early_stopping],
-        # callbacks=[lr_monitor, optuna_pruner],
-        logger=mlf_logger
-    )
-    trainer.log_hyperparameters(mlf_logger)
-
-    trainer.fit(classifier, dm)
-
-    trainer.test(model=classifier, datamodule=dm)
-
-    return trainer.callback_metrics["val/AUROC"].item()
+    return best_parameters, values, experiment, model
 
 
-if __name__ == "__main__":
-    # search_space = [
+def manual_args(args: Namespace) -> Namespace:
+    """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
+
+    # ax args
+    args.trials = 20
+    args.seed_init = 0
+
+    # trainer/logging args
+    args.experiment_name = "bbbp_tn_ax_32768"
+    args.tracking_uri = "https://mlflow.kriechbaumer.at"
+    args.max_steps = 1000
+    args.seed = 0
+    args.patience = 20
+
+    # data module args
+    args.batch_size = 128
+    args.split_seed = 0
+    args.n_bits = 32768
+    args.radius = 4
+    args.chirality = True
+    args.features = True
+
+    args.num_workers = 8
+    args.cache_dir = "../../../" + "data/molnet/bbbp/"
+
+    # model args
+    args.decision_size = 64
+    args.feature_size = 256
+    args.nr_layers = 2
+    args.nr_shared_layers = 2
+    args.nr_steps = 10
+    args.gamma = 1.8
+    args.lambda_sparse = 1e-6
+
+    args.virtual_batch_size = -1  # -1 do not use any batch normalization
+    args.normalize_input = False
+
+    args.lr = 0.001
+    args.optimizer = "adam"
+    # args.scheduler = "exponential_decay"
+    # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
+
+    #args.optimizer = "adamw"
+    #args.optimizer_params = {"weight_decay": 0.0001}
+    args.scheduler = "linear_with_warmup"
+    args.scheduler_params = {"warmup_steps": 10}
+    # args.scheduler_params={"warmup_steps": 0.01}
+
+    # ax parameters - will overwrite default args if available
+
+    # args.search_space = [
     #     {"name": "batch_size", "type": "choice", "values": [128, 256, 512, 1024, 2048]},
     #     {"name": "decision_size", "type": "choice", "values": [8, 16, 24, 32, 64, 128]},
     #     {"name": "nr_steps", "type": "choice", "values": [3, 4, 5, 6, 7, 8, 9, 10]},
@@ -146,21 +112,20 @@ if __name__ == "__main__":
     #     {"name": "decay_rate", "type": "choice", "values": [0.4, 0.8, 0.9, 0.95]},
     # ]
 
-    search_space = [
-        {"name": "batch_size", "type": "choice", "values": [128, 256, 512, 1024, 2048]},
+    args.search_space = [
+        {"name": "batch_size", "type": "choice", "values": [128, 256, 512, 1024]},
 
         {"name": "decision_size", "type": "range", "bounds": [8, 64]},
-        {"name": "nr_steps", "type": "range", "bounds": [1, 50]},
-        {"name": "gamma", "type": "range", "bounds": [1.0, 3.0]},
+        {"name": "nr_steps", "type": "range", "bounds": [3, 10]},
+        {"name": "gamma", "type": "choice", "values": [1.0, 1.2, 1.5, 2.0]},
 
-        {"name": "lambda_sparse", "type": "range", "bounds": [1e-5, 0.01], "log_scale": True},
-        {"name": "lr", "type": "range", "bounds": [1e-6, 0.1], "log_scale": True},
+        {"name": "lambda_sparse", "type": "choice", "values": [0.0, 1e-6, 1e-4, 1e-3, 0.01, 0.1]},
+        {"name": "lr", "type": "range", "bounds": [1e-4, 0.025], "log_scale": True},
 
         # {"name": "decay_step", "type": "choice", "values": [5, 20, 80, 100]},
         # {"name": "decay_rate", "type": "choice", "values": [0.4, 0.8, 0.9, 0.95]},
     ]
-
-    # search_space = [
+    # args.search_space = [
     #     {"name": "batch_size", "type": "choice", "values": [128, 256, 512, 1024, 2048]},
     #
     #     {"name": "decision_size", "type": "choice", "values": [8, 16, 24, 32, 64, 128]},
@@ -173,18 +138,25 @@ if __name__ == "__main__":
     #     #{"name": "decay_rate", "type": "choice", "values": [0.4, 0.8, 0.9, 0.95]},
     # ]
 
-    generation_strategy = GenerationStrategy(name="Sobol+GPEI",
-                                             steps=[
-                                                 GenerationStep(model=Models.SOBOL, num_trials=5),
-                                                 GenerationStep(model=Models.GPEI, num_trials=-1)]
-                                             )
+    return args
 
-    best_parameters, values, experiment, model = optimize(
-        parameters=search_space,
-        total_trials=50,
-        random_seed=SEED,
-        evaluation_function=train_evaluate,
-        objective_name="val/AUROC",
-        minimize=False,
-        generation_strategy=generation_strategy
-    )
+
+def run_cli() -> Namespace:
+    parser = ArgumentParser()
+
+    # parser.add_argument("--test", type=bool, default=True)
+    args = parser.parse_args()
+
+    # if no arguments have been provided we use manually set arguments - for debugging/dev
+    args = manual_args(args) if len(sys.argv) <= 1 else args
+
+    return args
+
+
+if __name__ == "__main__":
+    args = run_cli()
+
+    best_parameters, values, experiment, model = ax_optimize(args)
+
+    print(best_parameters)
+    print(values)
