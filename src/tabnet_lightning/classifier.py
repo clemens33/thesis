@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, List, Any
+from typing import Tuple, Optional, List, Any, Union
 
 import pytorch_lightning as pl
 import torch
@@ -8,7 +8,8 @@ from torch.optim.lr_scheduler import StepLR
 from torchmetrics import MetricCollection, Accuracy, AUROC
 
 from tabnet import TabNet
-from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler
+from tabnet_lightning.metrics import Sparsity, sparsity
+from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler, StackedEmbedding, MultiEmbedding
 
 
 class TabNetClassifier(pl.LightningModule):
@@ -31,7 +32,7 @@ class TabNetClassifier(pl.LightningModule):
                  #
                  categorical_indices: Optional[List[int]] = None,
                  categorical_size: Optional[List[int]] = None,
-                 embedding_dims: Optional[List[int]] = None,
+                 embedding_dims: Optional[Union[List[int], int]] = None,
                  #
                  lr: float = 1e-4,
                  optimizer: str = "adam",
@@ -40,6 +41,8 @@ class TabNetClassifier(pl.LightningModule):
                  scheduler_params: Optional[dict] = None,
                  #
                  class_weights: Optional[List[float]] = None,
+                 #
+                 log_sparsity: bool = False,
                  #
                  **kwargs
                  ):
@@ -86,7 +89,15 @@ class TabNetClassifier(pl.LightningModule):
 
         self.categorical_indices = categorical_indices
         if self.categorical_indices is not None:
-            self.embeddings = self._init_categorical_embeddings(categorical_size, embedding_dims)
+            if isinstance(embedding_dims, int) and embedding_dims == 1:
+                # much faster version - only supports embedding_dim of 1 atm
+                self.embeddings = StackedEmbedding(embedding_indices=categorical_indices, num_embeddings=categorical_size,
+                                                   embedding_dim=embedding_dims)
+            else:
+                self.embeddings = MultiEmbedding(embedding_indices=categorical_indices, num_embeddings=categorical_size,
+                                                 embedding_dims=embedding_dims)
+        else:
+            self.embeddings = nn.Identity()
 
         self.encoder = TabNet(input_size=input_size,
                               feature_size=feature_size,
@@ -115,10 +126,8 @@ class TabNetClassifier(pl.LightningModule):
             self.loss_fn = nn.CrossEntropyLoss(weight=class_weights)
 
         metrics = MetricCollection([
-            # Accuracy(num_classes=num_classes),
-            # AUROC(num_classes=num_classes, average="macro"),
             Accuracy(),
-            AUROC(average="macro"),
+            AUROC() if num_classes == 2 else AUROC(num_classes=num_classes),
             # TODO check -> leads to memory leak (atm fixed by calling reset in epoch end callbacks)
         ])
 
@@ -126,39 +135,22 @@ class TabNetClassifier(pl.LightningModule):
         self.val_metrics = metrics.clone(prefix="val/")
         self.test_metrics = metrics.clone(prefix="test/")
 
+        self.log_sparsity = log_sparsity
+
         self.save_hyperparameters()
 
-    def _init_categorical_embeddings(self, categorical_size: Optional[List[int]] = None,
-                                     embedding_dims: Optional[List[int]] = None) -> nn.ModuleList:
+    def forward(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
+        inputs = self.embeddings(inputs)
 
-        assert len(categorical_size) == len(
-            embedding_dims), f"categorical_size length {len(categorical_size)} must be the same as embedding_dims length {len(embedding_dims)}"
-
-        return nn.ModuleList([
-            nn.Embedding(num_embeddings=size, embedding_dim=dim) for size, dim in zip(categorical_size, embedding_dims)
-        ])
-
-    def forward(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if self.categorical_indices is not None:
-            inputs = self._embeddings(inputs)
-
-        decision, mask, entropy = self.encoder(inputs)
+        decision, mask, entropy, decisions, masks = self.encoder(inputs)
 
         logits = self.classifier(decision)
 
-        return logits, mask, entropy
+        return logits, mask, entropy, decisions, masks
 
-    def _embeddings(self, inputs: torch.Tensor) -> torch.Tensor:
-        for idx, embedding in zip(self.categorical_indices, self.embeddings):
-            input = inputs[..., idx].long()
-
-            output = embedding(input)
-            inputs[..., idx] = output[..., 0]
-
-        return inputs
-
-    def _step(self, inputs: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        logits, mask, entropy = self(inputs)
+    def _step(self, inputs: torch.Tensor, labels: torch.Tensor) -> Tuple[
+        torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[torch.Tensor]]:
+        logits, mask, entropy, _, masks = self(inputs)
 
         if self.num_classes == 2:
             logits = logits.squeeze()
@@ -169,15 +161,17 @@ class TabNetClassifier(pl.LightningModule):
         loss = self.loss_fn(logits, labels.float() if self.num_classes == 2 else labels)
         loss = loss + entropy * self.lambda_sparse
 
-        return loss, logits, probs, labels
+        return loss, logits, probs, labels, mask, masks
 
     def training_step(self, batch, batch_idx) -> torch.Tensor:
-        loss, logits, probs, labels = self._step(*batch)
+        loss, logits, probs, labels, mask, masks = self._step(*batch)
 
         self.log("train/loss", loss, prog_bar=True)
 
         output = self.train_metrics(probs, labels)
         self.log_dict(output)
+
+        self._log_sparity(inputs=batch[0], mask=mask, masks=masks, prefix="train")
 
         return loss
 
@@ -185,26 +179,38 @@ class TabNetClassifier(pl.LightningModule):
         self.train_metrics.reset()
 
     def validation_step(self, batch, batch_idx):
-        loss, logits, probs, labels = self._step(*batch)
+        loss, logits, probs, labels, mask, masks = self._step(*batch)
 
         self.log("val/loss", loss, prog_bar=True)
 
         output = self.val_metrics(probs, labels)
         self.log_dict(output, prog_bar=True)
 
+        self._log_sparity(inputs=batch[0], mask=mask, masks=masks, prefix="val")
+
     def validation_epoch_end(self, outputs: List[Any]):
         self.val_metrics.reset()
 
     def test_step(self, batch, batch_id):
-        loss, logits, probs, labels = self._step(*batch)
+        loss, logits, probs, labels, mask, masks = self._step(*batch)
 
         self.log("test/loss", loss)
 
         output = self.test_metrics(probs, labels)
         self.log_dict(output)
 
+        self._log_sparity(inputs=batch[0], mask=mask, masks=masks, prefix="test")
+
     def test_epoch_end(self, outputs: List[Any]):
         self.test_metrics.reset()
+
+    def _log_sparity(self, inputs: torch.Tensor, mask: torch.Tensor, masks: List[torch.Tensor], prefix: str):
+        if self.log_sparsity:
+            self.log(prefix + "/sparsity_input", sparsity(inputs), on_step=False, on_epoch=True)
+            self.log(prefix + "/mask_sparsity", sparsity(mask), on_step=False, on_epoch=True)
+
+            for i, m in enumerate(masks):
+                self.log(prefix + "/mask_sparsity_step" + str(i), sparsity(m), on_step=False, on_epoch=True)
 
     def configure_optimizers(self):
         optimizer = self._configure_optimizer()

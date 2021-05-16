@@ -1,4 +1,4 @@
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 
 import torch
 import torch.nn as nn
@@ -48,14 +48,22 @@ class TabNet(nn.Module):
         self.steps = nn.ModuleList([Step(input_size=input_size, feature_size=feature_size, decision_size=decision_size, nr_layers=nr_layers,
                                          shared_layers=shared_layers, gamma=gamma, momentum=momentum, **kwargs) for _ in range(nr_steps)])
 
-    def forward(self, input: torch.Tensor, prior: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, input: torch.Tensor, prior: Optional[torch.Tensor] = None) -> Tuple[
+        torch.Tensor, torch.Tensor, torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
+
         input = self.bn(input)
         feature = self.feature_transformer(input)
 
+        decisions, masks = [], []
         decisions_aggregated, masks_aggregated, entropy_aggregated = None, None, None
+
         prior = torch.ones_like(input) if prior is None else prior
         for step in self.steps:
             decision, feature, mask, prior = step(input, feature, prior)
+
+            # store individual decisions and masks
+            decisions.append(decision)
+            masks.append(mask)
 
             # aggregate decisions
             decisions_aggregated = decision if decisions_aggregated is None else decisions_aggregated + decision
@@ -68,4 +76,4 @@ class TabNet(nn.Module):
             _entropy = torch.mean(torch.sum(-mask * torch.log(mask + self.eps), dim=-1), dim=-1) / len(self.steps)
             entropy_aggregated = _entropy if entropy_aggregated is None else entropy_aggregated + _entropy
 
-        return decisions_aggregated, masks_aggregated, entropy_aggregated
+        return decisions_aggregated, masks_aggregated, entropy_aggregated, decisions, masks
