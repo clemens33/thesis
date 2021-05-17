@@ -1,124 +1,197 @@
-import torch
+import sys
+from argparse import Namespace, ArgumentParser
+from typing import Dict, Tuple, List
 
+import torch
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import MLFlowLogger
 
 from datasets import MolNetClassifierDataModule
+from experiments.models.index_emb_classifier import IndexEmbTabNetClassifier
 from tabnet_lightning import TabNetClassifier, TabNetTrainer
 
 
-def main():
-    seed = 1234
-
+def train_tn(args: Namespace) -> Tuple[Dict, Dict, Dict, TabNetClassifier, TabNetTrainer, MolNetClassifierDataModule]:
     mlf_logger = MLFlowLogger(
-        experiment_name="bbbp_b1",
-        tracking_uri="https://mlflow.kriechbaumer.at"
+        experiment_name=args.experiment_name,
+        tracking_uri=args.tracking_uri
     )
-
-    exp = mlf_logger.experiment
-    mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="seed", value=seed)
-
-    seed_everything(seed)
-    path = "../../../"
 
     dm = MolNetClassifierDataModule(
         name="bbbp",
-        batch_size=1024,
-        seed=seed,
+        batch_size=args.batch_size,
+        data_seed=args.split_seed,
         split="random",
         split_size=(0.8, 0.1, 0.1),
-        radius=6,
-        n_bits=4096,
-        chirality=True,
-        features=True,
-        num_workers=0, # 0 for debugging
-        cache_dir=path + "data/molnet/bbbp/",
-        use_cache=True
+        radius=args.radius,
+        n_bits=args.n_bits,
+        chirality=args.chirality,
+        features=args.features,
+        num_workers=args.num_workers,
+        cache_dir=args.cache_dir,
+        use_cache=True,
+        noise_features=args.noise_features if hasattr(args, "noise_features") else None,
     )
-
     dm.prepare_data()
     dm.setup()
 
     dm.log_hyperparameters(mlf_logger)
 
-    classifier = TabNetClassifier(
-        input_size=dm.input_size,
-        feature_size=63*2,
-        decision_size=63,
-        num_classes=len(dm.classes),
-        nr_layers=2,
-        nr_shared_layers=2,
-        nr_steps=25,
-        gamma=1.1325061404575094,
+    seed_everything(args.seed)
 
-        # pytorch batch norm uses 1 - momentum (e.g. 0.3 pytorch is the same as tf 0.7)
-        # momentum=0.01,
-        virtual_batch_size=-1,  # -1 do not use any batch normalization
-        # virtual_batch_size=32,
-        normalize_input=False,
+    exp = mlf_logger.experiment
+    mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="seed", value=args.seed)
 
-        # decision_activation=torch.tanh,
+    if getattr(args, "index_embeddings", False):
+        classifier = IndexEmbTabNetClassifier(
+            input_size=dm.input_size,
+            num_classes=len(dm.classes),
+            class_weights=dm.class_weights,
 
-        lambda_sparse=5.8819876851295004e-05,
+            **vars(args),
+        )
+    else:
+        classifier = TabNetClassifier(
+            input_size=dm.input_size,
+            num_classes=len(dm.classes),
+            class_weights=dm.class_weights,
 
-        # define embeddings for categorical variables - otherwise raw value is used
-        # categorical_indices=list(range(dm.input_size)),
-        # categorical_size=[2] * dm.input_size,
-        # embedding_dims=[1] * dm.input_size,
+            **vars(args),
+        )
 
-        lr=4.969043486282467e-05,
-        optimizer="adam",
-        # scheduler="exponential_decay",
-        # scheduler_params={"decay_step": 100, "decay_rate": 0.95},
+    mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="trainable_parameters",
+                                    value=sum(p.numel() for p in classifier.parameters() if p.requires_grad))
 
-        #optimizer="adamw",
-        #optimizer_params={"weight_decay": 0.0001},
-        scheduler="linear_with_warmup",
-        #scheduler_params={"warmup_steps": 0.1},
-        scheduler_params={"warmup_steps": 10},
+    callbacks = [
+        ModelCheckpoint(
+            monitor="val/AUROC",
+            mode="max",
+        ),
+        EarlyStopping(
+            monitor="val/AUROC",
+            patience=args.patience,
+            mode="max"
+        ),
+        LearningRateMonitor(logging_interval="step"),
+    ]
 
-        class_weights=dm.class_weights,
-    )
-    mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="trainable_parameters", value=sum(p.numel() for p in classifier.parameters() if p.requires_grad))
-
-    checkpoint_callback = ModelCheckpoint(
-        monitor="val/AUROC",
-        #dirpath='my/path/',
-        #filename='sample-mnist-{epoch:02d}-{val_loss:.2f}',
-        #save_top_k=3,
-        mode="max",
-    )
-
-    lr_monitor = LearningRateMonitor(logging_interval="step")
     trainer = TabNetTrainer(
-        # default_root_dir=path + "logs/molnet/bbbp2/",
-
         gpus=1,
-        #checkpoint_callback=False,
-        # accelerator="ddp",
 
-        max_steps=1000,
-        # max_epochs=300,
-        check_val_every_n_epoch=2,
+        max_steps=args.max_steps,
+        check_val_every_n_epoch=1,
+
         num_sanity_val_steps=-1,
 
-        fast_dev_run=False,
         deterministic=True,
         # precision=16,
 
-        # gradient_clip_algorithm="value",
-        # gradient_clip_val=2,
-
-        callbacks=[lr_monitor, checkpoint_callback],
+        callbacks=callbacks,
         logger=mlf_logger
     )
     trainer.log_hyperparameters(mlf_logger)
 
     trainer.fit(classifier, dm)
 
-    trainer.test(model=classifier, datamodule=dm)
+    # gets the best validation metrics
+    r = trainer.test(test_dataloaders=dm.val_dataloader())
+    results_val_best = {}
+    for k, v in r[0].items():
+        results_val_best[k.replace("test", "val")] = v
+
+    # gets the last validation metrics
+    results_val_last = {}
+    for k, v in trainer.callback_metrics.items():
+        if "val" in k:
+            results_val_last[k] = v.item() if isinstance(v, torch.Tensor) else v
+
+    results_test = trainer.test(test_dataloaders=dm.test_dataloader())
+
+    return results_test[0], results_val_best, results_val_last, classifier, trainer, dm
+
+
+def manual_args(args: Namespace) -> Namespace:
+    """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
+
+    # trainer/logging args
+    args.experiment_name = "bbbp_random_features_12288"
+    args.tracking_uri = "https://mlflow.kriechbaumer.at"
+    args.max_steps = 1000
+    args.seed = 0
+    args.patience = 50
+
+    # data module args
+    args.batch_size = 256
+    args.split_seed = 0
+    args.n_bits = 12288
+    args.radius = 4
+    args.chirality = True
+    args.features = True
+    args.noise_features = {
+        "type": "ones",
+        "factor": 1.0,
+        "position": "left",
+    }
+
+    args.num_workers = 8
+    args.cache_dir = "../../../" + "data/molnet/bbbp/"
+
+    # model args
+    args.decision_size = 16
+    args.feature_size = args.decision_size * 2
+    args.nr_layers = 2
+    args.nr_shared_layers = 2
+    args.nr_steps = 8
+    args.gamma = 1.2
+    # args.lambda_sparse = 1e-6
+    # args.lambda_sparse = 0.1
+    args.lambda_sparse = 0.001
+
+    args.virtual_batch_size = -1  # -1 do not use any batch normalization
+    args.normalize_input = False
+
+    # args.normalize_input = True
+    # args.virtual_batch_size = 256  # -1 do not use any batch normalization
+
+    args.lr = 0.001
+    args.optimizer = "adam"
+    # args.scheduler = "exponential_decay"
+    # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
+
+    # args.optimizer="adamw",
+    # args.optimizer_params={"weight_decay": 0.0001}
+    args.scheduler = "linear_with_warmup"
+    args.scheduler_params = {"warmup_steps": 10}
+    # args.scheduler_params={"warmup_steps": 0.1}
+
+    # args.index_embeddings = True
+    # args.categorical_indices = list(range(args.n_bits))
+    # args.categorical_size = [2] * args.n_bits
+    # args.embedding_dims = 1
+    # args.embedding_dims = [1] * args.n_bits
+
+    # args.log_sparsity = "verbose"
+    args.log_sparsity = True
+
+    return args
+
+
+def run_cli() -> Namespace:
+    parser = ArgumentParser()
+
+    # parser.add_argument("--test", type=bool, default=True)
+    args = parser.parse_args()
+
+    # if no arguments have been provided we use manually set arguments - for debugging/dev
+    args = manual_args(args) if len(sys.argv) <= 1 else args
+
+    return args
 
 
 if __name__ == "__main__":
-    main()
+    args = run_cli()
+
+    results_val, results_test, *_ = train_tn(args)
+
+    print(results_val)

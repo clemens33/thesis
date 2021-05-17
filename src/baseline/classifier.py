@@ -15,9 +15,11 @@ class MLP(nn.Module):
                  input_size: int,
                  hidden_size: Union[List[int], int],
                  output_size: int,
+                 dropout: float = 0.1,
                  activation: nn.Module = nn.ReLU(),
                  normalize_input: bool = False,
-                 batch_norm: bool = False
+                 batch_norm: bool = False,
+                 **kwargs
                  ):
         super(MLP, self).__init__()
 
@@ -31,7 +33,8 @@ class MLP(nn.Module):
             layers.append(nn.Sequential(
                 nn.Linear(in_features=in_features, out_features=hidden_size),
                 activation,
-                nn.BatchNorm1d(hidden_size) if batch_norm else nn.Identity()
+                nn.BatchNorm1d(hidden_size) if batch_norm else nn.Identity(),
+                nn.Dropout(p=dropout) if dropout > 0 else nn.Identity(),
             ))
 
             in_features = hidden_size
@@ -56,6 +59,7 @@ class MLPClassifier(pl.LightningModule):
                  input_size: int,
                  hidden_size: Union[List[int], int],
                  num_classes: int,
+                 dropout: float = 0.1,
                  #
                  categorical_indices: Optional[List[int]] = None,
                  categorical_size: Optional[List[int]] = None,
@@ -77,7 +81,7 @@ class MLPClassifier(pl.LightningModule):
         self.num_classes = num_classes
 
         output_size = 1 if num_classes == 2 else num_classes
-        self.classifier = MLP(input_size=input_size, hidden_size=hidden_size, output_size=output_size)
+        self.classifier = MLP(input_size=input_size, hidden_size=hidden_size, output_size=output_size, dropout=dropout)
 
         self.lr = lr
 

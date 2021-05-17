@@ -1,13 +1,15 @@
 import gzip
 import shutil
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from pathlib import Path, PurePosixPath
-from typing import Optional
+from typing import Optional, List
 
 import pandas as pd
 import pytorch_lightning as pl
 import torch
 import wget
+from pytorch_lightning.loggers import LightningLoggerBase
+from pytorch_lightning.utilities import rank_zero_only
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -133,6 +135,24 @@ class CovTypeDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=len(self.test_dataset), num_workers=self.num_workers, pin_memory=True)
 
+    @rank_zero_only
+    def log_hyperparameters(self, logger: LightningLoggerBase, ignore_param: List[str] = None, types: List = None):
+        if types is None:
+            types = [int, float, str, dict, list, bool, tuple]
+
+        if ignore_param is None:
+            ignore_param = ["class_weights"]
+
+        params = {}
+        for k, v in self.__dict__.items():
+            if k not in ignore_param and not k.startswith("_"):
+                if type(v) in types:
+                    params[k] = v
+
+        params = Namespace(**params)
+
+        logger.log_hyperparams(params)
+
     @staticmethod
     def add_data_module_specific_args(parent_parser: ArgumentParser) -> ArgumentParser:
         parser = parent_parser.add_argument_group("CovTypeDataModule")
@@ -145,5 +165,3 @@ class CovTypeDataModule(pl.LightningDataModule):
                             help="directory to store downloaded/splitted data - defaults to ~/.cache/covtype/")
 
         return parent_parser
-
-

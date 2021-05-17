@@ -1,37 +1,28 @@
 import sys
 from argparse import Namespace, ArgumentParser
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
-import torch
 from pytorch_lightning import seed_everything
-from pytorch_lightning.callbacks import LearningRateMonitor, EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import MLFlowLogger
 
-from baseline import MLPClassifier
-from datasets import MolNetClassifierDataModule
-from tabnet_lightning import TabNetTrainer
+from datasets import CovTypeDataModule
+from tabnet_lightning import TabNetClassifier, TabNetTrainer
 
 
-def train_bl(args: Namespace) -> Tuple[Dict, Dict, Dict, MLPClassifier, TabNetTrainer, MolNetClassifierDataModule]:
+def train_tn(args: Namespace) -> Tuple[List[Dict], List[Dict], TabNetClassifier, TabNetTrainer, CovTypeDataModule]:
     mlf_logger = MLFlowLogger(
         experiment_name=args.experiment_name,
         tracking_uri=args.tracking_uri
     )
 
-    dm = MolNetClassifierDataModule(
-        name="bbbp",
+    dm = CovTypeDataModule(
         batch_size=args.batch_size,
-        data_seed=args.split_seed,
-        split="random",
-        split_size=(0.8, 0.1, 0.1),
-        radius=args.radius,
-        n_bits=args.n_bits,
-        chirality=args.chirality,
-        features=args.features,
-        num_workers=args.num_workers,
+        num_workers=8,
         cache_dir=args.cache_dir,
-        use_cache=True
+        seed=args.seed,  # use same seed / random state as tabnet original implementation
     )
+
     dm.prepare_data()
     dm.setup()
 
@@ -42,10 +33,15 @@ def train_bl(args: Namespace) -> Tuple[Dict, Dict, Dict, MLPClassifier, TabNetTr
     exp = mlf_logger.experiment
     mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="seed", value=args.seed)
 
-    classifier = MLPClassifier(
-        input_size=dm.input_size,
-        num_classes=len(dm.classes),
-        class_weights=dm.class_weights,
+    if args.num_embeddings > 0:
+        args.categorical_indices = list(range(len(CovTypeDataModule.NUMERICAL_COLUMNS), CovTypeDataModule.NUM_FEATURES, 1))
+        args.categorical_size = [args.num_embeddings] * len(CovTypeDataModule.BINARY_COLUMNS)
+        args.embedding_dims = 1
+        #args.embedding_dims = [1] * len(CovTypeDataModule.BINARY_COLUMNS)
+
+    classifier = TabNetClassifier(
+        input_size=CovTypeDataModule.NUM_FEATURES,
+        num_classes=CovTypeDataModule.NUM_LABELS,
 
         **vars(args),
     )
@@ -54,14 +50,14 @@ def train_bl(args: Namespace) -> Tuple[Dict, Dict, Dict, MLPClassifier, TabNetTr
 
     callbacks = [
         ModelCheckpoint(
-            monitor="val/AUROC",
+            monitor="val/Accuracy",
             mode="max",
         ),
-        EarlyStopping(
-            monitor="val/AUROC",
-            patience=args.patience,
-            mode="max"
-        ),
+        # EarlyStopping(
+        #     monitor="val/AUROC",
+        #     patience=args.patience,
+        #     mode="max"
+        # ),
         LearningRateMonitor(logging_interval="step"),
     ]
 
@@ -75,6 +71,9 @@ def train_bl(args: Namespace) -> Tuple[Dict, Dict, Dict, MLPClassifier, TabNetTr
         deterministic=True,
         # precision=16,
 
+        gradient_clip_algorithm="value",
+        gradient_clip_val=2000,
+
         callbacks=callbacks,
         logger=mlf_logger
     )
@@ -82,52 +81,47 @@ def train_bl(args: Namespace) -> Tuple[Dict, Dict, Dict, MLPClassifier, TabNetTr
 
     trainer.fit(classifier, dm)
 
-    r = trainer.test(test_dataloaders=dm.val_dataloader())
-    results_val_best = {}
-    for k, v in r[0].items():
-        results_val_best[k.replace("test", "val")] = v
-
-    results_val_last = {}
-    for k, v in trainer.callback_metrics.items():
-        if "val" in k:
-            results_val_last[k] = v.item() if isinstance(v, torch.Tensor) else v
-
     results_test = trainer.test(test_dataloaders=dm.test_dataloader())
+    results_val = trainer.validate(val_dataloaders=dm.val_dataloader())
 
-    return results_test[0], results_val_best, results_val_last, classifier, trainer, dm
+    return results_val, results_test, classifier, trainer, dm
 
 
 def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
 
     # trainer/logging args
-    args.experiment_name = "bbbp_bl1"
+    args.experiment_name = "covtype_tn1"
     args.tracking_uri = "https://mlflow.kriechbaumer.at"
-    args.max_steps = 10
-    args.seed = 1
-    args.patience = 10
+    args.max_steps = 1000000
+    #args.max_steps = 100
+    args.seed = 0
 
     # data module args
-    args.batch_size = 256
-    args.split_seed = 0
-    args.n_bits = 768
-    args.radius = 4
-    args.chirality = True
-    args.features = True
+    args.batch_size = 16384
 
-    args.num_workers = 0
-    args.cache_dir = "../../../" + "data/molnet/bbbp/"
+    args.num_workers = 8
+    args.cache_dir = "../../../" + "data/uci/covtype/"
 
     # model args
-    args.hidden_size = [256, 256, 256]
-    # args.activation = nn.ReLU()
-    # args.batch_norm = False
-    # args.normalize_input = False
+    args.decision_size = 64
+    args.feature_size = args.decision_size * 2
+    args.nr_layers = 2
+    args.nr_shared_layers = 2
+    args.nr_steps = 5
+    args.gamma = 1.5
+    args.lambda_sparse = 0.0001
 
-    args.lr = 0.001
+    args.virtual_batch_size = 512
+    args.momentum = 0.3
+    args.normalize_input = True
+
+    args.lr = 0.02
     args.optimizer = "adam"
     args.scheduler = "exponential_decay"
-    args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
+    args.scheduler_params = {"decay_step": 500, "decay_rate": 0.95}
+
+    args.num_embeddings = 2
 
     # args.optimizer="adamw",
     # args.optimizer_params={"weight_decay": 0.0001},
@@ -153,6 +147,6 @@ def run_cli() -> Namespace:
 if __name__ == "__main__":
     args = run_cli()
 
-    results_val, results_test, *_ = train_bl(args)
+    results_val, results_test, *_ = train_tn(args)
 
     print(results_val)

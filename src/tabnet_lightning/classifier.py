@@ -8,7 +8,7 @@ from torch.optim.lr_scheduler import StepLR
 from torchmetrics import MetricCollection, Accuracy, AUROC
 
 from tabnet import TabNet
-from tabnet_lightning.metrics import Sparsity, sparsity
+from tabnet_lightning.metrics import Sparsity
 from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler, StackedEmbedding, MultiEmbedding
 
 
@@ -42,7 +42,7 @@ class TabNetClassifier(pl.LightningModule):
                  #
                  class_weights: Optional[List[float]] = None,
                  #
-                 log_sparsity: bool = False,
+                 log_sparsity: str = None,
                  #
                  **kwargs
                  ):
@@ -135,9 +135,23 @@ class TabNetClassifier(pl.LightningModule):
         self.val_metrics = metrics.clone(prefix="val/")
         self.test_metrics = metrics.clone(prefix="test/")
 
-        self.log_sparsity = log_sparsity
+        self.log_sparsity = str(log_sparsity)
+        self._init_sparsity_metrics(self.log_sparsity, nr_steps)
 
         self.save_hyperparameters()
+
+    def _init_sparsity_metrics(self, log_sparsity: str, nr_steps: int):
+
+        if log_sparsity in ["verbose", "True"]:
+            metrics = []
+            # all (inputs + mask + all masks)
+            metrics = [Sparsity() for _ in range(nr_steps + 3)]
+
+            self.sparsity_metrics = nn.ModuleDict({
+                "train_sparsity_metrics": nn.ModuleList([m.clone() for m in metrics]) if metrics else None,
+                "val_sparsity_metrics": nn.ModuleList([m.clone() for m in metrics]) if metrics else None,
+                "test_sparsity_metrics": nn.ModuleList([m.clone() for m in metrics]) if metrics else None,
+            })
 
     def forward(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
         inputs = self.embeddings(inputs)
@@ -171,12 +185,14 @@ class TabNetClassifier(pl.LightningModule):
         output = self.train_metrics(probs, labels)
         self.log_dict(output)
 
-        self._log_sparity(inputs=batch[0], mask=mask, masks=masks, prefix="train")
+        self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="train")
 
         return loss
 
     def training_epoch_end(self, outputs: List[Any]):
         self.train_metrics.reset()
+
+        self._log_sparsity(prefix="train", compute=True)
 
     def validation_step(self, batch, batch_idx):
         loss, logits, probs, labels, mask, masks = self._step(*batch)
@@ -186,10 +202,12 @@ class TabNetClassifier(pl.LightningModule):
         output = self.val_metrics(probs, labels)
         self.log_dict(output, prog_bar=True)
 
-        self._log_sparity(inputs=batch[0], mask=mask, masks=masks, prefix="val")
+        self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="val")
 
     def validation_epoch_end(self, outputs: List[Any]):
         self.val_metrics.reset()
+
+        self._log_sparsity(prefix="val", compute=True)
 
     def test_step(self, batch, batch_id):
         loss, logits, probs, labels, mask, masks = self._step(*batch)
@@ -199,18 +217,40 @@ class TabNetClassifier(pl.LightningModule):
         output = self.test_metrics(probs, labels)
         self.log_dict(output)
 
-        self._log_sparity(inputs=batch[0], mask=mask, masks=masks, prefix="test")
+        self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="test")
 
     def test_epoch_end(self, outputs: List[Any]):
         self.test_metrics.reset()
 
-    def _log_sparity(self, inputs: torch.Tensor, mask: torch.Tensor, masks: List[torch.Tensor], prefix: str):
-        if self.log_sparsity:
-            self.log(prefix + "/sparsity_input", sparsity(inputs), on_step=False, on_epoch=True)
-            self.log(prefix + "/mask_sparsity", sparsity(mask), on_step=False, on_epoch=True)
+        self._log_sparsity(prefix="test", compute=True)
 
-            for i, m in enumerate(masks):
-                self.log(prefix + "/mask_sparsity_step" + str(i), sparsity(m), on_step=False, on_epoch=True)
+    def _log_sparsity(self, prefix: str, compute: bool = False, inputs: Optional[torch.Tensor] = None, mask: Optional[torch.Tensor] = None,
+                      masks: Optional[List[torch.Tensor]] = None):
+
+        if self.log_sparsity in ["verbose", "True"]:
+            metrics = self.sparsity_metrics[prefix + "_sparsity_metrics"]
+
+            if compute:
+                self.log(prefix + "/sparsity_inputs", metrics[0].compute(), on_step=False, on_epoch=True)
+                self.log(prefix + "/sparsity_mask", metrics[1].compute(), on_step=False, on_epoch=True)
+                self.log(prefix + "/sparsity_masks_sum", metrics[2].compute(), on_step=False, on_epoch=True)
+            else:
+                masks_sum = torch.stack(masks, dim=0).sum(dim=0)
+
+                metrics[0].update(inputs)
+                metrics[1].update(mask)
+                metrics[2].update(masks_sum)
+
+            if self.log_sparsity == "verbose":
+                for i, metric in enumerate(metrics[3:]):
+                    if compute:
+                        self.log(prefix + "/sparsity_mask_step" + str(i), metric.compute(), on_step=False, on_epoch=True)
+                    else:
+                        metric.update(masks[i])
+
+            if compute:
+                for metric in metrics:
+                    metric.reset()
 
     def configure_optimizers(self):
         optimizer = self._configure_optimizer()

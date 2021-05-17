@@ -1,18 +1,18 @@
 import sys
-import random
 from argparse import Namespace, ArgumentParser
 
-from bbbp_tn import train_tn
+from bbbp_bl import train_bl
 from experiments import TuneAx
 
 
 def train_evaluate(args: Namespace):
-    args.feature_size = args.decision_size * 2
 
     # args.scheduler_params["decay_step"] = args.decay_step
     # args.scheduler_params["decay_rate"] = args.decay_rate
 
-    results_test, results_val_best, results_val_last, *_ = train_tn(args)
+    args.hidden_size = [args.hidden_size] * args.nr_layers
+
+    results_test, results_val_best, results_val_last, *_ = train_bl(args)
 
     metric = results_val_last[args.objective_name]
     # metric= random.random()
@@ -31,21 +31,18 @@ def manual_args(args: Namespace) -> Namespace:
     args.search_space = [
         # {"name": "batch_size", "type": "choice", "values": [128, 256, 512, 1024]},
 
-        {"name": "decision_size", "type": "choice", "values": [8, 16, 24, 32, 64, 128]},
-        {"name": "nr_steps", "type": "range", "bounds": [3, 10]},
-        {"name": "gamma", "type": "choice", "values": [1.0, 1.2, 1.5, 2.0]},
+        {"name": "nr_layers", "type": "range", "bounds": [3, 10]},
+        {"name": "hidden_size", "type": "range", "bounds": [32, 256]},
+        {"name": "dropout", "type": "choice", "values": [0.0, 0.05, 0.1, 0.3]},
 
-        {"name": "lambda_sparse", "type": "choice", "values": [0.0, 1e-6, 1e-4, 1e-3, 0.01, 0.1]},
-        # {"name": "lr", "type": "choice", "values": [0.005, 0.01, 0.02, 0.025]},
         {"name": "lr", "type": "range", "bounds": [1e-5, 0.001], "log_scale": True},
 
-        # {"name": "decay_step", "type": "choice", "values": [50, 200, 800]},
+        # {"name": "decay_step", "type": "choice", "values": [500, 2000, 8000]},
         # {"name": "decay_rate", "type": "choice", "values": [0.4, 0.8, 0.9, 0.95]},
-        # {"name": "decay_rate", "type": "range", "bounds": [0.0, 1.0]},
     ]
 
     # trainer/logging args
-    args.experiment_name = "bbbp_tn_4096_4_no_emb_ax_long2"
+    args.experiment_name = "bbbp_bl_4096_6_no_emb_ax_long1"
     args.tracking_uri = "https://mlflow.kriechbaumer.at"
     args.max_steps = 1000
     args.seed = 0
@@ -55,7 +52,7 @@ def manual_args(args: Namespace) -> Namespace:
     args.batch_size = 256
     args.split_seed = 0
     args.n_bits = 4096
-    args.radius = 4
+    args.radius = 6
     args.chirality = True
     args.features = True
 
@@ -63,13 +60,7 @@ def manual_args(args: Namespace) -> Namespace:
     args.cache_dir = "../../../" + "data/molnet/bbbp/"
 
     # model args
-    args.decision_size = 64
-    args.feature_size = args.decision_size * 2
-    args.nr_layers = 2
-    args.nr_shared_layers = 2
-    args.nr_steps = 6
-    args.gamma = 1.8
-    args.lambda_sparse = 1e-6
+    args.hidden_size = [256, 256, 256]
 
     args.virtual_batch_size = -1  # -1 do not use any batch normalization
     args.normalize_input = False
@@ -77,7 +68,7 @@ def manual_args(args: Namespace) -> Namespace:
     args.lr = 0.001
     args.optimizer = "adam"
     # args.scheduler = "exponential_decay"
-    # args.scheduler_params = {"decay_step": 100, "decay_rate": 0.95}
+    # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
 
     # args.optimizer = "adamw"
     # args.optimizer_params = {"weight_decay": 0.0001}
@@ -90,8 +81,6 @@ def manual_args(args: Namespace) -> Namespace:
     # args.categorical_size = [2] * args.n_bits
     # args.embedding_dims = 1
     # args.embedding_dims = [1] * len(CovTypeDataModule.BINARY_COLUMNS)
-
-    # args.log_sparsity = True
 
     return args
 

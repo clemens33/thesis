@@ -1,6 +1,72 @@
-from typing import Union
+from typing import Union, List
 
+import torch
 from torch.optim.lr_scheduler import LambdaLR
+
+import torch.nn as nn
+
+
+class MultiEmbedding(nn.Module):
+    def __init__(self,
+                 embedding_indices: List[int],
+                 num_embeddings: List[int],
+                 embedding_dims: List[int],
+                 ):
+        super(MultiEmbedding, self).__init__()
+
+        assert len(num_embeddings) == len(
+            embedding_dims), f"num_embeddings length {len(num_embeddings)} must be the same as embedding_dims length {len(embedding_dims)}"
+
+        self.embedding_indices = embedding_indices
+
+        self.embeddings = nn.ModuleList([
+            nn.Embedding(num_embeddings=num_dim, embedding_dim=dim) for num_dim, dim in zip(num_embeddings, embedding_dims)
+        ])
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        for idx, embedding in zip(self.embedding_indices, self.embeddings):
+            input = inputs[..., idx].long()
+
+            output = embedding(input)
+            inputs[..., idx] = output[..., 0]
+
+        return inputs
+
+
+class StackedEmbedding(nn.Module):
+    def __init__(self,
+                 embedding_indices: List[int],
+                 num_embeddings: List[int],
+                 embedding_dim: int = 1,
+                 stack: bool = True,
+                 ):
+        super(StackedEmbedding, self).__init__()
+
+        assert embedding_dim == 1, f"only 1 is supported at the moment for embedding_dim"
+        assert len(embedding_indices) == len(
+            num_embeddings), f"length of embedding_indices {len(embedding_indices)} do not match length of num_embeddings {len(num_embeddings)}"
+
+        self.stack = stack
+
+        self.register_buffer("embedding_indices", torch.LongTensor(embedding_indices))
+        self.register_buffer("offsets", torch.LongTensor([
+            sum(num_embeddings[:i]) for i in range(len(num_embeddings))
+        ]))
+
+        self.embeddings = nn.Embedding(sum(num_embeddings), embedding_dim)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        _input = input[..., self.embedding_indices]
+        _input = _input + self.offsets
+
+        output = self.embeddings(_input.long())
+
+        if self.stack:
+            output = output.reshape(*input.size()[:-1], -1)
+
+        input[..., self.embedding_indices] = output
+
+        return input
 
 
 def get_linear_schedule_with_warmup(optimizer, num_warmup_steps: Union[int, float], num_training_steps, last_epoch=-1):
@@ -57,6 +123,7 @@ def get_exponential_decay_scheduler(optimizer, decay_rate: float, decay_step: in
     Returns:
 
     """
+
     def lr_lambda(current_step: int):
         return decay_rate ** (current_step / decay_step)
 
