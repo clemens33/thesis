@@ -14,7 +14,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
 
-from datasets.utils import add_noise_features
+from datasets.utils import add_noise_features, add_noise
 
 dataset_loading_functions = {
     "bace_c": deepchem.molnet.load_bace_classification,
@@ -62,10 +62,11 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
                  num_workers: int = 4,
                  split: str = "random",
                  split_size: Tuple[float, float, float] = (0.8, 0.1, 0.1),
-                 data_seed: int = 5180,
+                 split_seed: int = 5180,
                  cache_dir=str(Path.home()) + "/.cache/molnet/",
                  use_cache: bool = True,
                  noise_features: Optional[Dict] = None,
+                 noise: Optional[str] = None,
                  **kwargs):
         """
 
@@ -75,7 +76,7 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
             num_workers: num workers used for data loaders
             split: type of split
             split_size: split size
-            data_seed: seed used for splitting
+            split_seed: seed used for splitting + noise (if defined)
             cache_dir: cache directory
             use_cache: whether to use cache or not
             noise_features: whether to add noise features
@@ -90,7 +91,7 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         self.name = name
         self.split = split
         self.split_size = split_size
-        self.data_seed = data_seed
+        self.split_seed = split_seed
 
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -99,6 +100,7 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         self.use_cache = use_cache
 
         self.noise_features = noise_features
+        self.noise = noise
 
         self.kwargs = kwargs
 
@@ -148,13 +150,16 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         X = sparse_desc_mat.toarray()
         y = all_dataset[0].y
 
+        if self.noise:
+            X = add_noise(X, type=self.noise, seed=self.split_seed)
+
         # add random features/noise
         if self.noise_features:
             X, _ = add_noise_features(X,
                                       factor=self.noise_features["factor"],
                                       type=self.noise_features["type"],
                                       position=self.noise_features["position"],
-                                      seed=self.data_seed)
+                                      seed=self.split_seed)
 
         self.input_size = X.shape[-1]
 
@@ -171,11 +176,11 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         # default split and create dataset
 
         test_size = sum(self.split_size[1:])
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=test_size, random_state=self.data_seed,
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=test_size, random_state=self.split_seed,
                                                           stratify=self.classes if self.split == "stratified" else None)
 
         test_size = self.split_size[-1] / test_size
-        X_val, X_test, y_val, y_test = train_test_split(X_val, y_val, test_size=test_size, random_state=self.data_seed,
+        X_val, X_test, y_val, y_test = train_test_split(X_val, y_val, test_size=test_size, random_state=self.split_seed,
                                                         stratify=self.classes if self.split == "stratified" else None)
 
         self.train_dataset = TensorDataset(torch.from_numpy(X_train).float(), torch.from_numpy(y_train).long().squeeze())

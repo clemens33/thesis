@@ -21,7 +21,7 @@ def train_bl(args: Namespace) -> Tuple[Dict, Dict, Dict, MLPClassifier, TabNetTr
     dm = MolNetClassifierDataModule(
         name="bbbp",
         batch_size=args.batch_size,
-        data_seed=args.split_seed,
+        split_seed=args.split_seed,
         split="random",
         split_size=(0.8, 0.1, 0.1),
         radius=args.radius,
@@ -30,7 +30,9 @@ def train_bl(args: Namespace) -> Tuple[Dict, Dict, Dict, MLPClassifier, TabNetTr
         features=args.features,
         num_workers=args.num_workers,
         cache_dir=args.cache_dir,
-        use_cache=True
+        use_cache=True,
+        noise_features=args.noise_features if hasattr(args, "noise_features") else None,
+        noise=args.noise if hasattr(args, "noise") else None,
     )
     dm.prepare_data()
     dm.setup()
@@ -101,39 +103,43 @@ def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
 
     # trainer/logging args
-    args.experiment_name = "bbbp_bl1"
+    args.experiment_name = "bbbp_bl_random_features_12288"
     args.tracking_uri = "https://mlflow.kriechbaumer.at"
-    args.max_steps = 10
-    args.seed = 1
-    args.patience = 10
+    args.max_steps = 1000
+    args.seed = 0  # model seed
+    args.patience = 50
 
     # data module args
     args.batch_size = 256
     args.split_seed = 0
-    args.n_bits = 768
+    args.n_bits = 12288
     args.radius = 4
     args.chirality = True
     args.features = True
+    args.noise_features = {
+        "type": "replicate",
+        "factor": 1.0,
+        "position": "right",
+    }
 
-    args.num_workers = 0
+    args.num_workers = 8
     args.cache_dir = "../../../" + "data/molnet/bbbp/"
 
     # model args
-    args.hidden_size = [256, 256, 256]
-    # args.activation = nn.ReLU()
-    # args.batch_norm = False
-    # args.normalize_input = False
+    args.hidden_size = [211] * 5
+    args.dropout = 0.1
 
-    args.lr = 0.001
+    args.lr = 1.000e-5
     args.optimizer = "adam"
-    args.scheduler = "exponential_decay"
-    args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
+    # args.scheduler = "exponential_decay"
+    # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
 
-    # args.optimizer="adamw",
-    # args.optimizer_params={"weight_decay": 0.0001},
-    # args.scheduler="linear_with_warmup",
-    # args.scheduler_params={"warmup_steps": 0.1},
-    # args.scheduler_params={"warmup_steps": 10},
+    # args.optimizer = "adamw"
+    # args.optimizer_params = {"weight_decay": 0.00005}
+    args.scheduler = "linear_with_warmup"
+    args.scheduler_params = {"warmup_steps": 10}
+    # args.scheduler_params={"warmup_steps": 0.01}
+
 
     return args
 
