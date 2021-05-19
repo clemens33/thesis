@@ -1,6 +1,8 @@
+import math
 from typing import Tuple
 
 import numpy as np
+from numpy.random import default_rng
 
 
 def add_noise_features(input: np.ndarray, factor: float, type="standard_normal", position: str = "random", seed: int = 0) -> Tuple[
@@ -28,29 +30,70 @@ def add_noise_features(input: np.ndarray, factor: float, type="standard_normal",
     nr_features_new = nr_features + nr_features_noise
     new_shape = input.shape[:-1] + (nr_features_new,)
 
+    rng = default_rng(seed)
+
     # initialize noise/random features
-    np.random.seed(seed)
     if type == "zeros":
         input_new = np.zeros(shape=new_shape, dtype=input.dtype)
     elif type == "ones":
         input_new = np.ones(shape=new_shape, dtype=input.dtype)
     elif type == "binary":
-        input_new = np.random.randint(2, size=new_shape).astype(dtype=input.dtype)
+        np.random.seed(seed)
+        input_new = rng.integers(2, size=new_shape).astype(dtype=input.dtype)
     elif type == "standard_normal":
-        input_new = np.random.standard_normal(size=new_shape).astype(dtype=input.dtype)
+        input_new = rng.standard_normal(size=new_shape).astype(dtype=input.dtype)
+    elif type == "replicate":
+        f = math.ceil(factor) + 1
+        input_new = np.tile(input, f)[..., :nr_features_new]
     else:
         raise ValueError(f"noise feature type {type} is not implemented.")
 
     # add noise/random features at defined position
-    np.random.seed(seed)
     if position == "right":
         feature_indices = np.arange(nr_features)
     elif position == "left":
         feature_indices = np.arange(nr_features_new - nr_features, nr_features_new)
     elif position == "random":
-        feature_indices = np.random.choice(np.arange(nr_features_new), size=nr_features, replace=False)
+        feature_indices = rng.choice(np.arange(nr_features_new), size=nr_features, replace=False)
     else:
         raise ValueError(f"noise feature position {position} is not implemented.")
 
     input_new[..., feature_indices] = input
     return input_new, feature_indices
+
+
+def add_noise(input: np.ndarray, type: str = "standard_normal", seed: int = 0) -> np.ndarray:
+    """adds noise to input"""
+
+    rng = default_rng(seed)
+
+    if type == "standard_normal":
+        noise = rng.standard_normal(size=input.shape).astype(dtype=input.dtype)
+    elif type == "zeros_standard_normal":
+        input = input * 10000
+
+        noise = rng.standard_normal(size=input.shape).astype(dtype=input.dtype)
+        input = input + noise
+
+        input[input > 900] = 1
+
+        return input
+    elif type == "zeros_standard_normal2":
+        input = input * 10000
+
+        noise = rng.standard_normal(size=input.shape).astype(dtype=input.dtype)
+        input = input + noise
+
+        input[input > 900] = 100
+
+        return input
+    elif type == "replace_zeros":
+        input[input == 0] = -1
+
+        return input
+    elif type == "add_ones":
+        noise = np.ones_like(input)
+    else:
+        noise = np.zeros_like(input)
+
+    return input + noise
