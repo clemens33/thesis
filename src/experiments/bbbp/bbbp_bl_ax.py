@@ -31,8 +31,8 @@ def manual_args(args: Namespace) -> Namespace:
     args.search_space = [
         # {"name": "batch_size", "type": "choice", "values": [128, 256, 512, 1024]},
 
-        {"name": "nr_layers", "type": "range", "bounds": [3, 10]},
-        {"name": "hidden_size", "type": "range", "bounds": [32, 256]},
+        {"name": "nr_layers", "type": "range", "bounds": [1, 8]},
+        {"name": "hidden_size", "type": "range", "bounds": [16, 256]},
         {"name": "dropout", "type": "choice", "values": [0.0, 0.05, 0.1, 0.3]},
 
         {"name": "lr", "type": "range", "bounds": [1e-5, 0.001], "log_scale": True},
@@ -42,7 +42,7 @@ def manual_args(args: Namespace) -> Namespace:
     ]
 
     # trainer/logging args
-    args.experiment_name = "bbbp_bl_4096_6_no_emb_ax_long1"
+    args.experiment_name = "bbbp_bl_512_4_no_emb_ax_long1"
     args.tracking_uri = "https://mlflow.kriechbaumer.at"
     args.max_steps = 1000
     args.seed = 0
@@ -51,8 +51,8 @@ def manual_args(args: Namespace) -> Namespace:
     # data module args
     args.batch_size = 256
     args.split_seed = 0
-    args.n_bits = 4096
-    args.radius = 6
+    args.n_bits = 512
+    args.radius = 4
     args.chirality = True
     args.features = True
 

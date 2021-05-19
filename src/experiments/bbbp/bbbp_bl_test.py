@@ -7,7 +7,7 @@ import mlflow
 import numpy as np
 from pytorch_lightning import seed_everything
 
-from bbbp_tn import train_tn
+from bbbp_bl import train_bl
 
 
 def test(args: Namespace) -> Dict:
@@ -15,10 +15,12 @@ def test(args: Namespace) -> Dict:
 
     aurocs_test, aurocs_val, split_seeds = [], [], []
     for t in range(args.trials):
-        results_val, results_test, *_ = train_tn(args)
+        print(f"start trial {t + 1}/{args.trials}, test/AUROC_mean_running {np.array(aurocs_test).mean() if t > 1 else 0}")
 
-        auroc_test = results_test[0]["test/AUROC"]
-        auroc_val = results_val[0]["val/AUROC"]
+        results_test, results_val_best, *_ = train_bl(args)
+
+        auroc_test = results_test["test/AUROC"]
+        auroc_val = results_val_best["val/AUROC"]
         # auroc_test = random.random()
         # auroc_val = random.random()
 
@@ -44,20 +46,20 @@ def test(args: Namespace) -> Dict:
             mlflow.log_param(k, v)
 
         for t in range(args.trials):
-            mlflow.log_metric("split_seed", split_seeds[t], step=t)
-            mlflow.log_metric("auroc_test", aurocs_test[t], step=t)
-            mlflow.log_metric("auroc_test_mean_running", np.array(aurocs_test[:t]).mean(), step=t)
-            mlflow.log_metric("auroc_test_std_running", np.array(aurocs_test[:t]).std(), step=t)
+            mlflow.log_metric("trail/split_seed", split_seeds[t], step=t)
+            mlflow.log_metric("trial/test/AUROC", aurocs_test[t], step=t)
+            mlflow.log_metric("trial/test/AUROC_mean_running", np.array(aurocs_test[:t]).mean(), step=t)
+            mlflow.log_metric("trial/test/AUROC_std_running", np.array(aurocs_test[:t]).std(), step=t)
 
-            mlflow.log_metric("auroc_val", aurocs_val[t], step=t)
-            mlflow.log_metric("auroc_val_mean_running", np.array(aurocs_val[:t]).mean(), step=t)
-            mlflow.log_metric("auroc_val_std_running", np.array(aurocs_val[:t]).std(), step=t)
+            mlflow.log_metric("trial/val/AUROC", aurocs_val[t], step=t)
+            mlflow.log_metric("trial/val/AUROC_mean_running", np.array(aurocs_val[:t]).mean(), step=t)
+            mlflow.log_metric("trial/val/AUROC_std_running", np.array(aurocs_val[:t]).std(), step=t)
 
-        mlflow.log_metric("auroc_test_mean", auroc_test_mean)
-        mlflow.log_metric("auroc_test_std", auroc_test_std)
+        mlflow.log_metric("trial/test/AUROC_mean", auroc_test_mean)
+        mlflow.log_metric("trial/test/AUROC_std", auroc_test_std)
 
-        mlflow.log_metric("auroc_val_mean", auroc_val_mean)
-        mlflow.log_metric("auroc_val_std", auroc_val_std)
+        mlflow.log_metric("trial/val/AUROC_mean", auroc_val_mean)
+        mlflow.log_metric("trial/val/AUROC_std", auroc_val_std)
 
     return {
         "auroc_test_mean": auroc_test_mean,
@@ -76,16 +78,16 @@ def manual_args(args: Namespace) -> Namespace:
     args.split_seed_init = 0
 
     # trainer/logging args
-    args.experiment_name = "bbbp_bl_test_12288"
+    args.experiment_name = "bbbp_bl_test_512_4_no_emb_long1"
     args.tracking_uri = "https://mlflow.kriechbaumer.at"
     args.max_steps = 1000
     args.seed = 0  # model seed
-    args.patience = 20
+    args.patience = 50
 
     # data module args
-    args.batch_size = 128
+    args.batch_size = 256
     args.split_seed = 0
-    args.n_bits = 12288
+    args.n_bits = 512
     args.radius = 4
     args.chirality = True
     args.features = True
@@ -94,18 +96,10 @@ def manual_args(args: Namespace) -> Namespace:
     args.cache_dir = "../../../" + "data/molnet/bbbp/"
 
     # model args
-    args.decision_size = 23
-    args.feature_size = 23 * 2
-    args.nr_layers = 2
-    args.nr_shared_layers = 2
-    args.nr_steps = 5
-    args.gamma = 1.2
-    args.lambda_sparse = 0.001
+    args.hidden_size = [167] * 4
+    args.dropout = 0.0
 
-    args.virtual_batch_size = -1  # -1 do not use any batch normalization
-    args.normalize_input = False
-
-    args.lr = 0.0003525269090350661
+    args.lr = 1.818e-5
     args.optimizer = "adam"
     # args.scheduler = "exponential_decay"
     # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}

@@ -78,7 +78,7 @@ def manual_args(args: Namespace) -> Namespace:
     args.split_seed_init = 0
 
     # trainer/logging args
-    args.experiment_name = "bbbp_tn_test_4096_4_no_emb_long2"
+    args.experiment_name = "bbbp_tn_test_12288_4_no_emb_long2"
     args.tracking_uri = "https://mlflow.kriechbaumer.at"
     args.max_steps = 1000
     args.seed = 0  # model seed
@@ -86,8 +86,8 @@ def manual_args(args: Namespace) -> Namespace:
 
     # data module args
     args.batch_size = 256
-    args.data_seed = 0
-    args.n_bits = 4096
+    args.split_seed = 0
+    args.n_bits = 12288
     args.radius = 4
     args.chirality = True
     args.features = True

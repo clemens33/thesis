@@ -15,13 +15,14 @@ from tabnet_lightning import TabNetClassifier, TabNetTrainer
 def train_tn(args: Namespace) -> Tuple[Dict, Dict, Dict, TabNetClassifier, TabNetTrainer, MolNetClassifierDataModule]:
     mlf_logger = MLFlowLogger(
         experiment_name=args.experiment_name,
-        tracking_uri=args.tracking_uri
+        tracking_uri=args.tracking_uri,
+        tags=args.tags
     )
 
     dm = MolNetClassifierDataModule(
         name="bbbp",
         batch_size=args.batch_size,
-        data_seed=args.split_seed,
+        split_seed=args.split_seed,
         split="random",
         split_size=(0.8, 0.1, 0.1),
         radius=args.radius,
@@ -32,6 +33,7 @@ def train_tn(args: Namespace) -> Tuple[Dict, Dict, Dict, TabNetClassifier, TabNe
         cache_dir=args.cache_dir,
         use_cache=True,
         noise_features=args.noise_features if hasattr(args, "noise_features") else None,
+        noise=args.noise if hasattr(args, "noise") else None,
     )
     dm.prepare_data()
     dm.setup()
@@ -40,7 +42,7 @@ def train_tn(args: Namespace) -> Tuple[Dict, Dict, Dict, TabNetClassifier, TabNe
 
     seed_everything(args.seed)
 
-    exp = mlf_logger.experiment
+    #exp = mlf_logger.experiment
     mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="seed", value=args.seed)
 
     if getattr(args, "index_embeddings", False):
@@ -115,7 +117,7 @@ def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
 
     # trainer/logging args
-    args.experiment_name = "bbbp_random_features_12288"
+    args.experiment_name = "bbbp_tn_random_features_12288"
     args.tracking_uri = "https://mlflow.kriechbaumer.at"
     args.max_steps = 1000
     args.seed = 0
@@ -128,11 +130,12 @@ def manual_args(args: Namespace) -> Namespace:
     args.radius = 4
     args.chirality = True
     args.features = True
-    args.noise_features = {
-        "type": "ones",
-        "factor": 1.0,
-        "position": "left",
-    }
+    # args.noise_features = {
+    #     "type": "zeros",
+    #     "factor": 1.0,
+    #     "position": "random",
+    # }
+    args.noise = "zeros_standard_normal2"
 
     args.num_workers = 8
     args.cache_dir = "../../../" + "data/molnet/bbbp/"
