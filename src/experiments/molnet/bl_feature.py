@@ -1,11 +1,11 @@
 import sys
 from argparse import Namespace, ArgumentParser
 from experiments.grid_runner import GridRunner
-from bbbp_tn import train_tn
+from bl import train_bl
 
 
 def run(args):
-    gs = GridRunner(function=train_tn, objective_name="test/AUROC", args=args, **vars(args))
+    gs = GridRunner(function=train_bl, objective_name="test/AUROC", args=args, **vars(args))
     gs.run()
 
 
@@ -79,15 +79,15 @@ def manual_args(args: Namespace) -> Namespace:
     #     ]
     # }
 
-
     # trainer/logging args
-    args.experiment_name = "bbbp_tn_random_features_512"
+    args.experiment_name = "bbbp_bl_random_features_512"
     args.tracking_uri = "https://mlflow.kriechbaumer.at"
     args.max_steps = 1000
     args.seed = 0  # model seed
     args.patience = 50
 
     # data module args
+    args.data_name = "bbbp"
     args.batch_size = 256
     args.split_seed = 0
     args.n_bits = 512
@@ -99,21 +99,13 @@ def manual_args(args: Namespace) -> Namespace:
     args.cache_dir = "../../../" + "data/molnet/bbbp/"
 
     # model args
-    args.decision_size = 16
-    args.feature_size = args.decision_size * 2
-    args.nr_layers = 2
-    args.nr_shared_layers = 2
-    args.nr_steps = 4
-    args.gamma = 1.0
-    args.lambda_sparse = 1.000e-4
+    args.hidden_size = [167] * 4
+    args.dropout = 0.1
 
-    args.virtual_batch_size = -1  # -1 do not use any batch normalization
-    args.normalize_input = False
-
-    args.lr = 2.754e-4
+    args.lr = 1.818e-05
     args.optimizer = "adam"
-    #args.scheduler = "exponential_decay"
-    #args.scheduler_params = {"decay_step": 800, "decay_rate": 0.377}
+    # args.scheduler = "exponential_decay"
+    # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
 
     # args.optimizer = "adamw"
     # args.optimizer_params = {"weight_decay": 0.00005}
@@ -121,10 +113,9 @@ def manual_args(args: Namespace) -> Namespace:
     args.scheduler_params = {"warmup_steps": 10}
     # args.scheduler_params={"warmup_steps": 0.01}
 
-    args.log_sparsity = True
+    #args.log_sparsity = True
 
     return args
-
 
 
 def run_cli() -> Namespace:
