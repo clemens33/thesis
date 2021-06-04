@@ -6,6 +6,7 @@ import deepchem
 import numpy as np
 import pytorch_lightning as pl
 import torch
+from deepchem.feat import RDKitDescriptors
 from pytorch_lightning.loggers import LightningLoggerBase
 from pytorch_lightning.utilities import rank_zero_only
 from rdkit.Chem import AllChem
@@ -163,6 +164,21 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
             Path(PurePosixPath(cached_descriptors)).parent.mkdir(parents=True, exist_ok=True)
             sparse_desc_mat = csr_matrix(desc_mat)
             save_npz(cached_descriptors, sparse_desc_mat)
+        elif self.featurizer_name == "rdkit":
+            tasks, all_dataset, transformers = dataset_loading_functions[self.name](featurizer="Raw", splitter=None,
+                                                                                    data_dir=self.cache_dir,
+                                                                                    reload=self.use_cache)
+
+            cached_descriptors = self.cache_dir + self.name + "_rdkit" + ".npz"
+            if Path(PurePosixPath(cached_descriptors)).exists() and self.use_cache:
+                return
+
+            d = RDKitDescriptors()
+            desc_mat = d.featurize(all_dataset[0].X)
+
+            Path(PurePosixPath(cached_descriptors)).parent.mkdir(parents=True, exist_ok=True)
+            sparse_desc_mat = csr_matrix(desc_mat)
+            save_npz(cached_descriptors, sparse_desc_mat)
         else:
             raise ValueError(f"unknown featurizer {self.featurizer_name}")
 
@@ -180,6 +196,8 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
             cached_descriptors = self.cache_dir + self.name + "_ecfp" + f"_radius{str(radius)}" + f"_n_bits{str(n_bits)}" + f"_chirality{str(chirality)}" + f"_features{str(features)}" + ".npz"
         elif self.featurizer_name == "ecfc":
             cached_descriptors = self.cache_dir + self.name + "_ecfc" + f"_radius{str(radius)}" + f"_seed{str(self.split_seed)}" + f"_chirality{str(chirality)}" + f"_features{str(features)}" + ".npz"
+        elif self.featurizer_name == "rdkit":
+            cached_descriptors = self.cache_dir + self.name + "_rdkit" + ".npz"
         else:
             raise ValueError(f"unknown featurizer {self.featurizer_name}")
 
@@ -187,6 +205,11 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
 
         X = sparse_desc_mat.toarray()
         y = all_dataset[0].y
+
+        # filter nan samples
+        indices = np.all(~np.isnan(X), axis=1)
+        X = X[indices, ...]
+        y = y[indices]
 
         if self.noise:
             X = add_noise(X, type=self.noise, seed=self.split_seed)
@@ -200,7 +223,14 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
                                       seed=self.split_seed)
 
         self.input_size = X.shape[-1]
-        self.categorical_sizes = np.max(X, axis=0) + 1
+
+        # automatically determine categorical variables
+        X_int = X.astype(int)
+        mask = np.all((X - X_int) == 0, axis=0)
+
+        categorical_sizes = np.max(X, axis=0) + 1
+        self.categorical_sizes = categorical_sizes[mask].astype(int).tolist()
+        self.categorical_indices = np.argwhere(mask == True).flatten().tolist()
 
         w = all_dataset[0].w if hasattr(all_dataset[0], "w") else None
         self.classes, self.class_weights = self.determine_classes(y, w)
@@ -269,3 +299,15 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         params = Namespace(**params)
 
         logger.log_hyperparams(params)
+
+
+if __name__ == "__main__":
+    dm = MolNetClassifierDataModule(
+        name="bbbp",
+        batch_size=128,
+        split_seed=0,
+        featurizer_name="rdkit",
+    )
+
+    dm.prepare_data()
+    dm.setup()
