@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, List, Callable
+from typing import Tuple, Optional, List, Callable, Union
 
 import torch
 import torch.nn as nn
@@ -14,8 +14,11 @@ class Step(nn.Module):
                  decision_size: int,
                  nr_layers: int = 1,
                  shared_layers: Optional[List[Layer]] = None,
-                 gamma: float = 1.0,
+                 gamma: Union[nn.Parameter, float] = 1.0,
                  decision_activation: Callable = nn.ReLU(),
+                 relaxation_type: str = "gamma_fixed",
+                 alpha: Union[nn.Parameter, float] = 2.0,
+                 attentive_type: str = "sparsemax",
                  **kwargs):
         super(Step, self).__init__()
 
@@ -23,10 +26,19 @@ class Step(nn.Module):
 
         self.decision_size = decision_size
 
-        self.attentive_transformer = AttentiveTransformer(attentive_size=feature_size - decision_size, input_size=input_size, gamma=gamma,
+        self.attentive_transformer = AttentiveTransformer(attentive_size=feature_size - decision_size,
+                                                          input_size=input_size,
+                                                          gamma=gamma,
+                                                          relaxation_type=relaxation_type,
+                                                          alpha=alpha,
+                                                          attentive_type=attentive_type,
                                                           **kwargs)
-        self.feature_transformer = FeatureTransformer(input_size=input_size, feature_size=feature_size, nr_layers=nr_layers,
-                                                      shared_layers=shared_layers, **kwargs)
+
+        self.feature_transformer = FeatureTransformer(input_size=input_size,
+                                                      feature_size=feature_size,
+                                                      nr_layers=nr_layers,
+                                                      shared_layers=shared_layers,
+                                                      **kwargs)
 
         self.decision_activation = decision_activation
 

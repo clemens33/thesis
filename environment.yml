@@ -31,3 +31,4 @@ dependencies:
       - jsonargparse[signatures] # needed for lightning cli
       - optuna
       - ax-platform
+      - entmax==1.0

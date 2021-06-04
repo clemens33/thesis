@@ -1,7 +1,8 @@
-from typing import Any, Tuple
+from typing import Any, Tuple, Union
 
 import torch
 import torch.nn as nn
+from entmax import entmax_bisect
 
 
 class _Sparsemax1(torch.autograd.Function):
@@ -201,3 +202,17 @@ class Sparsemax(nn.Module):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         return self.sparsemax(input, self.dim)
+
+
+class EntmaxBisect(nn.Module):
+    def __init__(self, alpha: Union[nn.Parameter, float] = 1.5, dim: int = -1, n_iter: int = 50):
+        super().__init__()
+
+        self.dim = dim
+        self.n_iter = n_iter
+        self.alpha = alpha
+
+    def forward(self, X):
+        return entmax_bisect(
+            X, alpha=self.alpha, dim=self.dim, n_iter=self.n_iter
+        )

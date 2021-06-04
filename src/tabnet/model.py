@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Union
 
 import torch
 import torch.nn as nn
@@ -20,12 +20,19 @@ class TabNet(nn.Module):
                  eps: float = 1e-5,
                  momentum: float = 0.1,
                  normalize_input: bool = True,
+                 #
+                 attentive_type: str = "sparsemax",
+                 alpha: float = 2.0,
+                 relaxation_type: str = "gamma_fixed",
+                 #
+                 return_all: bool = True,
                  **kwargs
                  ):
         super(TabNet, self).__init__()
 
         assert nr_steps > 0, "there must be at least one decision step"
 
+        self.return_all = return_all
         self.eps = eps
 
         shared_layers = []
@@ -45,11 +52,29 @@ class TabNet(nn.Module):
         self.feature_transformer = FeatureTransformer(input_size=input_size, feature_size=feature_size, nr_layers=nr_layers,
                                                       shared_layers=shared_layers, momentum=momentum, **kwargs)
 
-        self.steps = nn.ModuleList([Step(input_size=input_size, feature_size=feature_size, decision_size=decision_size, nr_layers=nr_layers,
-                                         shared_layers=shared_layers, gamma=gamma, momentum=momentum, **kwargs) for _ in range(nr_steps)])
+        gamma_shared_trainable = (relaxation_type == "gamma_shared_trainable")
+        gamma = nn.Parameter(torch.scalar_tensor(gamma), requires_grad=gamma_shared_trainable) if gamma_shared_trainable else gamma
 
-    def forward(self, input: torch.Tensor, prior: Optional[torch.Tensor] = None) -> Tuple[
-        torch.Tensor, torch.Tensor, torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
+        alpha_shared_trainable = (attentive_type == "alpha_shared_trainable")
+        alpha = nn.Parameter(torch.scalar_tensor(alpha), requires_grad=alpha_shared_trainable) if alpha_shared_trainable else alpha
+
+        self.steps = nn.ModuleList([Step(input_size=input_size,
+                                         feature_size=feature_size,
+                                         decision_size=decision_size,
+                                         nr_layers=nr_layers,
+                                         shared_layers=shared_layers,
+                                         gamma=gamma,
+                                         relaxation_type=relaxation_type,
+                                         alpha=alpha,
+                                         attentive_type=attentive_type,
+                                         momentum=momentum,
+                                         **kwargs) for _ in range(nr_steps)])
+
+    def forward(self, input: torch.Tensor, prior: Optional[torch.Tensor] = None) -> Union[Tuple[
+                                                                                              torch.Tensor, torch.Tensor, torch.Tensor,
+                                                                                              List[torch.Tensor], List[torch.Tensor]],
+                                                                                          Tuple[
+                                                                                              torch.Tensor, torch.Tensor, torch.Tensor]]:
 
         input = self.bn(input)
         feature = self.feature_transformer(input)
@@ -76,4 +101,7 @@ class TabNet(nn.Module):
             _entropy = torch.mean(torch.sum(-mask * torch.log(mask + self.eps), dim=-1), dim=-1) / len(self.steps)
             entropy_aggregated = _entropy if entropy_aggregated is None else entropy_aggregated + _entropy
 
-        return decisions_aggregated, masks_aggregated, entropy_aggregated, decisions, masks
+        if self.return_all:
+            return decisions_aggregated, masks_aggregated, entropy_aggregated, decisions, masks
+        else:
+            return decisions_aggregated, masks_aggregated, entropy_aggregated
