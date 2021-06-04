@@ -41,7 +41,7 @@ class TestTabNet():
 
         #print(f"number of parameters for tabnet: {sum(p.numel() for p in tabnet.parameters() if p.requires_grad)}")
 
-        decision, mask, entropy = tabnet(input)
+        decision, mask, entropy, *_ = tabnet(input)
 
         expected_mask_dim = input_dim
         expected_decision_dim = input_dim[:-1] + (decision_size,)
@@ -100,12 +100,20 @@ class TestTabNet():
 
         assert True
 
-    @pytest.mark.parametrize("input_dim, feature_size, decision_size, nr_layers, nr_shared_layers, nr_steps, gamma, kwargs",
+    @pytest.mark.parametrize("input_dim, feature_size, decision_size, nr_layers, nr_shared_layers, nr_steps, gamma, alpha,  kwargs",
                              [
-                                 ((1, 4), 10, 5, 2, 2, 3, 1.0, {}),
-                                 ((2, 8), 10, 5, 2, 2, 3, 2.0, {}),
-                                 ((1, 6, 4), 10, 5, 2, 2, 3, 1.0, {}),
-                                 ((2, 6, 4), 10, 5, 2, 2, 3, 1.0, {}),
+                                 ((2, 8), 10, 5, 2, 2, 3, 3.0, 1.5, {"relaxation_type": "gamma_trainable"}),
+                                 ((2, 8), 10, 5, 2, 2, 3, 3.0, 1.5, {"attentive_type": "alpha_trainable"}),
+                                 ((2, 8), 10, 5, 2, 2, 3, 3.0, 1.5, {"relaxation_type": "gamma_shared_trainable"}),
+                                 ((2, 8), 10, 5, 2, 2, 3, 3.0, 1.5, {"attentive_type": "alpha_shared_trainable"}),
+                                 ((2, 8), 10, 5, 2, 2, 3, 3.0, 1.5, {"attentive_type": "alpha_shared_trainable", "relaxation_type": "gamma_shared_trainable"}),
+                                 ((2, 8), 10, 5, 2, 2, 3, 3.0, 1.5, {"attentive_type": "alpha_shared_trainable", "relaxation_type": "gamma_trainable"}),
+                                 ((2, 8), 10, 5, 2, 2, 3, 3.0, 1.5, {"attentive_type": "alpha_trainable", "relaxation_type": "gamma_shared_trainable"}),
+                                 ((1, 4), 10, 5, 2, 2, 3, 1.0, 1.0, {}),
+                                 ((2, 8), 10, 5, 2, 2, 3, 2.0, 1.5, {}),
+                                 ((2, 8), 10, 5, 2, 2, 3, 3.0, 1.5, {}),
+                                 ((1, 6, 4), 10, 5, 2, 2, 3, 1.0, 2.0, {}),
+                                 ((2, 6, 4), 10, 5, 2, 2, 3, 1.0, 1.8, {}),
                              ])
     def test_autograd(self,
                       input_dim,
@@ -115,10 +123,12 @@ class TestTabNet():
                       nr_shared_layers,
                       nr_steps,
                       gamma,
+                      alpha,
                       kwargs):
         """test tabnet autograd"""
         from tabnet import TabNet
 
+        torch.random.manual_seed(1)
         input = torch.randn(size=input_dim, dtype=torch.double, requires_grad=True)
         input_size = input.shape[-1]
 
@@ -128,7 +138,10 @@ class TestTabNet():
                         nr_layers=nr_layers,
                         nr_shared_layers=nr_shared_layers,
                         nr_steps=nr_steps,
-                        gamma=gamma)
+                        gamma=gamma,
+                        alpha=alpha,
+                        return_all=False,
+                        **kwargs)
 
         # gradcheck by default works with double
         tabnet.double()
