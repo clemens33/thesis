@@ -21,14 +21,16 @@ class TabNetClassifier(pl.LightningModule):
                  nr_layers: int = 1,
                  nr_shared_layers: int = 1,
                  nr_steps: int = 1,
-                 gamma: float = 1.0,
-                 #
                  momentum: float = 0.01,
                  virtual_batch_size: int = 8,
                  normalize_input: bool = True,
+                 eps: float = 1e-5,
+                 gamma: float = 1.0,
+                 relaxation_type: str = "gamma_fixed",
+                 alpha: float = 2.0,
+                 attentive_type: str = "sparsemax",
                  #
                  lambda_sparse: float = 1e-4,
-                 eps: float = 1e-5,
                  #
                  categorical_indices: Optional[List[int]] = None,
                  categorical_size: Optional[List[int]] = None,
@@ -43,6 +45,8 @@ class TabNetClassifier(pl.LightningModule):
                  class_weights: Optional[List[float]] = None,
                  #
                  log_sparsity: str = None,
+                 log_parameters: bool = True,
+                 log_masks: str = None,
                  #
                  **kwargs
                  ):
@@ -72,6 +76,8 @@ class TabNetClassifier(pl.LightningModule):
             scheduler: scheduler name
             scheduler_params: scheduler params
             class_weights: optional class weights
+            log_sparsity: optional str - if "True" logs the sparsity of the aggregated mask - if set to "verbose" logs all masks for each step
+            log_parameters: optional - if True logs the parameter alpha and gamma
             **kwargs: optional tabnet parameters
         """
         super(TabNetClassifier, self).__init__()
@@ -110,6 +116,10 @@ class TabNetClassifier(pl.LightningModule):
                               momentum=momentum,
                               virtual_batch_size=virtual_batch_size,
                               normalize_input=normalize_input,
+
+                              relaxation_type=relaxation_type,
+                              alpha=alpha,
+                              attentive_type=attentive_type,
                               **kwargs)
 
         if num_classes == 2:
@@ -137,6 +147,9 @@ class TabNetClassifier(pl.LightningModule):
 
         self.log_sparsity = str(log_sparsity)
         self._init_sparsity_metrics(self.log_sparsity, nr_steps)
+
+        self.log_parameters = log_parameters
+        self.log_masks = log_masks
 
         self.save_hyperparameters()
 
@@ -186,6 +199,7 @@ class TabNetClassifier(pl.LightningModule):
         self.log_dict(output)
 
         self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="train")
+        self._log_parameters()
 
         return loss
 
@@ -204,7 +218,14 @@ class TabNetClassifier(pl.LightningModule):
 
         self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="val")
 
+        # return {
+        #     "inputs": batch[0],
+        #     "aggregated_mask": mask,
+        #     "masks": masks
+        # }
+
     def validation_epoch_end(self, outputs: List[Any]):
+
         self.val_metrics.reset()
 
         self._log_sparsity(prefix="val", compute=True)
@@ -224,6 +245,27 @@ class TabNetClassifier(pl.LightningModule):
 
         self._log_sparsity(prefix="test", compute=True)
 
+    def _log_parameters(self):
+        """logs the gamma and alphas parameters if available"""
+        if self.log_parameters:
+
+            gammas, alphas = [], []
+            for i, step in enumerate(self.encoder.steps):
+                gammas.append(step.attentive_transformer.gamma)
+                alphas.append(step.attentive_transformer.attentive.alpha)
+
+            self.log("gamma", torch.mean(torch.Tensor(gammas)), on_step=True, on_epoch=False)
+            self.log("alpha", torch.mean(torch.Tensor(alphas)), on_step=True, on_epoch=False)
+
+            # only log individual gammas and alphas if they are not the same
+            if gammas[0] != gammas[-1]:
+                for i, gamma in enumerate(gammas):
+                    self.log("gamma_step" + str(i), gamma, on_step=True, on_epoch=False)
+
+            if alphas[0] != alphas[-1]:
+                for i, alpha in enumerate(alphas):
+                    self.log("alpha_step" + str(i), alpha, on_step=True, on_epoch=False)
+
     def _log_sparsity(self, prefix: str, compute: bool = False, inputs: Optional[torch.Tensor] = None, mask: Optional[torch.Tensor] = None,
                       masks: Optional[List[torch.Tensor]] = None):
 
@@ -233,13 +275,13 @@ class TabNetClassifier(pl.LightningModule):
             if compute:
                 self.log(prefix + "/sparsity_inputs", metrics[0].compute(), on_step=False, on_epoch=True)
                 self.log(prefix + "/sparsity_mask", metrics[1].compute(), on_step=False, on_epoch=True)
-                self.log(prefix + "/sparsity_masks_sum", metrics[2].compute(), on_step=False, on_epoch=True)
+                # self.log(prefix + "/sparsity_masks_sum", metrics[2].compute(), on_step=False, on_epoch=True)
             else:
-                masks_sum = torch.stack(masks, dim=0).sum(dim=0)
+                # masks_sum = torch.stack(masks, dim=0).sum(dim=0)
 
                 metrics[0].update(inputs)
                 metrics[1].update(mask)
-                metrics[2].update(masks_sum)
+                # metrics[2].update(masks_sum)
 
             if self.log_sparsity == "verbose":
                 for i, metric in enumerate(metrics[3:]):
