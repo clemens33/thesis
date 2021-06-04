@@ -12,7 +12,7 @@ def splits(function: Callable, args: Namespace) -> Dict:
 
     aurocs_test, aurocs_val, split_seeds = [], [], []
     for t in range(args.trials):
-        print(f"start trial {t+1}/{args.trials}, test/AUROC_mean_running {np.array(aurocs_test).mean() if t > 1 else 0}")
+        print(f"{args.experiment_name} - start trial {t+1}/{args.trials}, test/AUROC_mean_running {np.array(aurocs_test).mean() if t > 1 else 0}")
 
         results_test, results_val_best, *_ = function(args)
 

@@ -1,6 +1,7 @@
+import os
 import sys
 from argparse import Namespace, ArgumentParser
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple
 
 import torch
 from pytorch_lightning import seed_everything
@@ -56,8 +57,8 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
         )
     else:
         if getattr(args, "categorical_embeddings", False):
-            args.categorical_indices = list(range(dm.input_size))
-            args.categorical_size = dm.categorical_sizes.tolist()
+            args.categorical_indices = getattr(args, "categorical_indices", dm.categorical_indices)
+            args.categorical_size = getattr(args, "categorical_sizes", dm.categorical_sizes)
             args.embedding_dims = 1
             # args.embedding_dims = [1] * args.n_bits
 
@@ -89,9 +90,11 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
 
     trainer = TabNetTrainer(
         gpus=1,
+        terminate_on_nan=True,
 
         max_steps=args.max_steps,
         check_val_every_n_epoch=1,
+        # terminate_on_nan=True,
 
         num_sanity_val_steps=-1,
 
@@ -103,7 +106,10 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
     )
     trainer.log_hyperparameters(mlf_logger)
 
-    trainer.fit(classifier, dm)
+    try:
+        trainer.fit(classifier, dm)
+    except Exception as e:
+        print(f"exception raised during training: {e}")
 
     # gets the best validation metrics
     r = trainer.test(test_dataloaders=dm.val_dataloader())
@@ -126,8 +132,8 @@ def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
 
     # trainer/logging args
-    args.experiment_name = "bbbp_tn_ecfc_norm_t1"
-    args.tracking_uri = "https://mlflow.kriechbaumer.at"
+    args.experiment_name = "bbbp_test1"
+    args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
     args.seed = 0
     args.patience = 50
@@ -146,7 +152,7 @@ def manual_args(args: Namespace) -> Namespace:
     #     "position": "random",
     # }
     # args.noise = "zeros_standard_normal2"
-    args.featurizer_name = "ecfc"
+    args.featurizer_name = "rdkit"
 
     args.num_workers = 8
     args.cache_dir = "../../../" + "data/molnet/bbbp/"
@@ -154,15 +160,21 @@ def manual_args(args: Namespace) -> Namespace:
     # model args
     args.decision_size = 16
     args.feature_size = args.decision_size * 2
-    args.nr_layers = 4
-    args.nr_shared_layers = 0
-    args.nr_steps = 8
+    args.nr_layers = 2
+    args.nr_shared_layers = 2
+    args.nr_steps = 6
     args.gamma = 1.2
+    # args.gamma_shared_trainable = True
+    args.gamma_trainable = True
+    args.alpha = 2.0
+    args.attentive_type = "sparsemax"
+    # args.alpha_shared_trainable = True
     # args.lambda_sparse = 1e-6
     # args.lambda_sparse = 0.1
     args.lambda_sparse = 0.001
 
     args.virtual_batch_size = 32  # -1 do not use any batch normalization
+    # args.virtual_batch_size = -1  # -1 do not use any batch normalization
     args.normalize_input = True
 
     # args.normalize_input = True
@@ -171,16 +183,16 @@ def manual_args(args: Namespace) -> Namespace:
     args.lr = 0.01
     args.optimizer = "adam"
     args.scheduler = "exponential_decay"
-    args.scheduler_params = {"decay_step": 100, "decay_rate": 0.95}
+    args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
 
-    # args.optimizer="adamw",
+    # args.optimizer="adamw"
     # args.optimizer_params={"weight_decay": 0.0001}
     # args.scheduler = "linear_with_warmup"
     # args.scheduler_params = {"warmup_steps": 10}
-    # args.scheduler_params={"warmup_steps": 0.1}
+    # args.scheduler_params={"warmup_steps": 0.05}
 
     # args.index_embeddings = True
-    args.categorical_embeddings = True
+    # args.categorical_embeddings = True
     # args.categorical_indices = list(range(args.n_bits))
     # args.categorical_size = [2] * args.n_bits
     # args.embedding_dims = 1
@@ -188,6 +200,7 @@ def manual_args(args: Namespace) -> Namespace:
 
     # args.log_sparsity = "verbose"
     args.log_sparsity = True
+    args.log_parameters = True
 
     return args
 

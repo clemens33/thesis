@@ -1,3 +1,4 @@
+import os
 import sys
 from argparse import Namespace, ArgumentParser
 from typing import Dict, Tuple
@@ -106,35 +107,35 @@ def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
 
     # trainer/logging args
-    args.experiment_name = "bbbp_bl_random_features_12288"
-    args.tracking_uri = "https://mlflow.kriechbaumer.at"
+    args.experiment_name = "bbbp_bl_rdkit_man1"
+    args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
     args.seed = 0  # model seed
     args.patience = 50
 
     # data module args
-    args.data_name = "bace_c"
+    args.data_name = "bbbp"
     args.batch_size = 256
     args.split_seed = 0
     args.n_bits = 12288
     args.radius = 4
     args.chirality = True
     args.features = True
-    args.noise_features = {
-        "type": "replicate",
-        "factor": 1.0,
-        "position": "right",
-    }
-    args.featurizer_name = "ecfp"
+    # args.noise_features = {
+    #     "type": "replicate",
+    #     "factor": 1.0,
+    #     "position": "right",
+    # }
+    args.featurizer_name = "rdkit"
 
     args.num_workers = 8
     args.cache_dir = "../../../" + "data/molnet/bbbp/"
 
     # model args
-    args.hidden_size = [211] * 5
+    args.hidden_size = [128] * 4
     args.dropout = 0.1
 
-    args.lr = 1.000e-5
+    args.lr = 1.000e-4
     args.optimizer = "adam"
     # args.scheduler = "exponential_decay"
     # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}

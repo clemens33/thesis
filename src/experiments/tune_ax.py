@@ -176,7 +176,7 @@ class TuneAx:
 #
 #     # trainer/logging args
 #     args.experiment_name = "ax_pipeline_test2"
-#     args.tracking_uri = "https://mlflow.kriechbaumer.at"
+#     args.tracking_uri=os.getenv("TRACKING_URI", default="http://localhost:5000")
 #     args.seed = 0  # model seed
 #
 #     # model args

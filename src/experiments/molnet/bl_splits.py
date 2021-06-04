@@ -1,3 +1,4 @@
+import os
 import sys
 from argparse import Namespace, ArgumentParser
 
@@ -14,7 +15,7 @@ def manual_args(args: Namespace) -> Namespace:
 
     # trainer/logging args
     args.experiment_name = "bbbp_bl_ecfc_nonorm_noemb_test1"
-    args.tracking_uri = "https://mlflow.kriechbaumer.at"
+    args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
     args.seed = 0  # model seed
     args.patience = 50
@@ -23,7 +24,7 @@ def manual_args(args: Namespace) -> Namespace:
     args.data_name = "bbbp"
     args.batch_size = 256
     args.split_seed = 0
-    #args.n_bits = 4096
+    # args.n_bits = 4096
     args.radius = 6
     args.chirality = True
     args.features = True

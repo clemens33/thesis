@@ -31,6 +31,7 @@ class TuneOptuna:
                  tracking_uri: Optional[str] = None,
                  sampler_name: str = "tpe",
                  pruner_name: Optional[str] = None,
+                 pruner_warmup_steps: int = 10,
                  **kwargs) -> None:
         """
 
@@ -75,7 +76,7 @@ class TuneOptuna:
             raise ValueError(f"sampler {sampler_name} not available")
 
         if pruner_name == "median":
-            self.pruner = MedianPruner()
+            self.pruner = MedianPruner(n_warmup_steps=pruner_warmup_steps)
         elif pruner_name is None:
             self.pruner = NopPruner()
         else:
@@ -90,7 +91,7 @@ class TuneOptuna:
 
         self.metrics = []
 
-        # TODO add singleton gate to only allow single instance of TuneAx
+        # TODO add singleton gate to only allow single instance of TuneOptuna
         TuneOptuna._instance = self
 
     def optimize(self):
@@ -247,7 +248,7 @@ class TuneOptuna:
 #
 #     # trainer/logging args
 #     args.experiment_name = "optuna_pipeline_test1"
-#     args.tracking_uri = "https://mlflow.kriechbaumer.at"
+#     args.tracking_uri=os.getenv("TRACKING_URI", default="http://localhost:5000")
 #     args.seed = 0  # model seed
 #
 #     # model args

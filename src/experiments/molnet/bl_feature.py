@@ -1,4 +1,5 @@
 import sys
+import os
 from argparse import Namespace, ArgumentParser
 from experiments.grid_runner import GridRunner
 from bl import train_bl
@@ -81,7 +82,7 @@ def manual_args(args: Namespace) -> Namespace:
 
     # trainer/logging args
     args.experiment_name = "bbbp_bl_random_features_512"
-    args.tracking_uri = "https://mlflow.kriechbaumer.at"
+    args.tracking_uri=os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
     args.seed = 0  # model seed
     args.patience = 50

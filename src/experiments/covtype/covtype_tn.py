@@ -1,7 +1,9 @@
 import sys
+import os
 from argparse import Namespace, ArgumentParser
 from typing import Dict, Tuple, List
 
+import torch
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import MLFlowLogger
@@ -10,7 +12,7 @@ from datasets import CovTypeDataModule
 from tabnet_lightning import TabNetClassifier, TabNetTrainer
 
 
-def train_tn(args: Namespace) -> Tuple[List[Dict], List[Dict], TabNetClassifier, TabNetTrainer, CovTypeDataModule]:
+def train_tn(args: Namespace) -> Tuple[Dict, Dict, Dict, TabNetClassifier, TabNetTrainer, CovTypeDataModule]:
     mlf_logger = MLFlowLogger(
         experiment_name=args.experiment_name,
         tracking_uri=args.tracking_uri
@@ -37,7 +39,7 @@ def train_tn(args: Namespace) -> Tuple[List[Dict], List[Dict], TabNetClassifier,
         args.categorical_indices = list(range(len(CovTypeDataModule.NUMERICAL_COLUMNS), CovTypeDataModule.NUM_FEATURES, 1))
         args.categorical_size = [args.num_embeddings] * len(CovTypeDataModule.BINARY_COLUMNS)
         args.embedding_dims = 1
-        #args.embedding_dims = [1] * len(CovTypeDataModule.BINARY_COLUMNS)
+        # args.embedding_dims = [1] * len(CovTypeDataModule.BINARY_COLUMNS)
 
     classifier = TabNetClassifier(
         input_size=CovTypeDataModule.NUM_FEATURES,
@@ -81,10 +83,26 @@ def train_tn(args: Namespace) -> Tuple[List[Dict], List[Dict], TabNetClassifier,
 
     trainer.fit(classifier, dm)
 
-    results_test = trainer.test(test_dataloaders=dm.test_dataloader())
-    results_val = trainer.validate(val_dataloaders=dm.val_dataloader())
+    # gets the best validation metrics
+    r = trainer.test(test_dataloaders=dm.val_dataloader())
+    results_val_best = {}
+    for k, v in r[0].items():
+        results_val_best[k.replace("test", "val")] = v
 
-    return results_val, results_test, classifier, trainer, dm
+    # gets the last validation metrics
+    results_val_last = {}
+    for k, v in trainer.callback_metrics.items():
+        if "val" in k:
+            results_val_last[k] = v.item() if isinstance(v, torch.Tensor) else v
+
+    results_test = trainer.test(test_dataloaders=dm.test_dataloader())
+
+    return results_test[0], results_val_best, results_val_last, classifier, trainer, dm
+
+    # results_test = trainer.test(test_dataloaders=dm.test_dataloader())
+    # results_val = trainer.validate(val_dataloaders=dm.val_dataloader())
+    #
+    # return results_val, results_test, classifier, trainer, dm
 
 
 def manual_args(args: Namespace) -> Namespace:
@@ -92,9 +110,9 @@ def manual_args(args: Namespace) -> Namespace:
 
     # trainer/logging args
     args.experiment_name = "covtype_tn1"
-    args.tracking_uri = "https://mlflow.kriechbaumer.at"
+    args.tracking_uri=os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000000
-    #args.max_steps = 100
+    # args.max_steps = 100
     args.seed = 0
 
     # data module args
@@ -110,7 +128,14 @@ def manual_args(args: Namespace) -> Namespace:
     args.nr_shared_layers = 2
     args.nr_steps = 5
     args.gamma = 1.5
-    args.lambda_sparse = 0.0001
+    #args.gamma_trainable = True
+    args.gamma_shared_trainable = True
+    #args.lambda_sparse = 0.0001
+    #args.lambda_sparse = 0.0
+
+    args.alpha = 1.5
+    #args.alpha_trainable = True
+    #args.alpha_shared_trainable = True
 
     args.virtual_batch_size = 512
     args.momentum = 0.3
@@ -128,6 +153,9 @@ def manual_args(args: Namespace) -> Namespace:
     # args.scheduler="linear_with_warmup",
     # args.scheduler_params={"warmup_steps": 0.1},
     # args.scheduler_params={"warmup_steps": 10},
+
+    args.log_sparsity = True
+    args.log_parameters = True
 
     return args
 
@@ -147,6 +175,8 @@ def run_cli() -> Namespace:
 if __name__ == "__main__":
     args = run_cli()
 
-    results_val, results_test, *_ = train_tn(args)
+    results_test, results_val_best, results_val_last, *_ = train_tn(args)
 
-    print(results_val)
+    print(f"results_test: {results_test}")
+    print(f"results_val_best: {results_val_best}")
+    print(f"results_val_last: {results_val_last}")
