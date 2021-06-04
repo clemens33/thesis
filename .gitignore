@@ -133,3 +133,5 @@ idea
 idea/
 
 *dummy*
+
+env.sh

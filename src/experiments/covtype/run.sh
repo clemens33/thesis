@@ -5,7 +5,9 @@ source ../env.sh
 
 script="$1"
 
-if [ "${script: -3}" == ".py" ]; then
+
+if [ "${script: -3}" == ".py" ]
+then
   echo "run $script ..."
 
   python "$script"
