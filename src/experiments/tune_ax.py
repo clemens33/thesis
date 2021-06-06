@@ -1,7 +1,9 @@
 import copy
+import os
 import sys
 import uuid
 from argparse import Namespace, ArgumentParser
+from pprint import pprint
 from typing import Callable, Dict, List, Optional, Union
 
 import mlflow
@@ -147,8 +149,9 @@ class TuneAx:
     def train_evaluate(parameterization: Dict):
         assert TuneAx._instance is not None, "TuneAx needs to be initialized first"
 
-        args = copy.deepcopy(TuneAx._instance.args)
-        function = TuneAx._instance.function
+        instance = TuneAx._instance
+        args = copy.deepcopy(instance.args)
+        function = instance.function
 
         # overwrite all arguments by the search space
         for key, value in parameterization.items():
@@ -157,26 +160,34 @@ class TuneAx:
 
         metric = function(args)
 
-        TuneAx._instance.metrics.append(metric)
+        instance.metrics.append(metric)
+
+        best_trial = np.array(instance.metrics).argmin() if instance.minimize else np.array(instance.metrics).argmax()
+        best_metric = np.array(instance.metrics).min() if instance.minimize else np.array(instance.metrics).max()
+
+        print(f"{instance.experiment_name} - {len(instance.metrics)}/{instance.trials} - parameters: {parameterization}")
+        print(f"{instance.experiment_name} - {len(instance.metrics)}/{instance.trials} - {instance.objective_name}: {metric}")
+        print(f"{instance.experiment_name} - trail {best_trial} is best with {instance.objective_name}: {best_metric}")
 
         return metric
 
-# # test -> TODO move to pytest
+#
+# # # test -> TODO move to pytest
 # def manual_args(args: Namespace) -> Namespace:
 #     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
 #
 #     # ax args
-#     args.trials = 20
+#     args.trials = 10
 #     args.search_space = [
-#         {"name": "x", "type": "range", "bounds": [0.0, 2.0]},
-#         {"name": "y", "type": "range", "bounds": [0.0, 2.0]},
+#         {"name": "x", "type": "range", "bounds": [0.0, 10.0]},
+#         {"name": "y", "type": "range", "bounds": [0.0, 10.0]},
 #     ]
 #     args.objective_name = "z"
-#     args.minimize = True
+#     args.minimize = False
 #
 #     # trainer/logging args
-#     args.experiment_name = "ax_pipeline_test2"
-#     args.tracking_uri=os.getenv("TRACKING_URI", default="http://localhost:5000")
+#     args.experiment_name = "ax_pipeline_test3"
+#     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
 #     args.seed = 0  # model seed
 #
 #     # model args

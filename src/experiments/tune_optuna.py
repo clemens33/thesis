@@ -212,25 +212,20 @@ class TuneOptuna:
             ]
 
             kwargs["callbacks"] = callbacks
-            #setattr(args, "callbacks", callbacks)
+            # setattr(args, "callbacks", callbacks)
 
         metric = function(args, **kwargs)
 
         instance.metrics.append(metric)
 
+        best_trial = np.array(instance.metrics).argmin() if instance.minimize else np.array(instance.metrics).argmax()
+        best_metric = np.array(instance.metrics).min() if instance.minimize else np.array(instance.metrics).max()
+
+        # print(f"{instance.experiment_name} - {len(instance.metrics)}/{instance.trials} - parameters: {parameterization}")
+        print(f"{instance.experiment_name} - {len(instance.metrics)}/{instance.trials} - {instance.objective_name}: {metric}")
+        print(f"{instance.experiment_name} - trail {best_trial} is best with {instance.objective_name}: {best_metric}")
+
         return metric
-
-
-
-
-
-
-
-
-
-
-
-
 
 #
 # # test -> TODO move to pytest
