@@ -1,6 +1,11 @@
-from typing import Union, List
+import tempfile
+import uuid
+from typing import Union, List, Optional
 
+import numpy as np
 import torch
+from matplotlib import pyplot as plt
+from matplotlib.figure import figaspect
 from torch.optim.lr_scheduler import LambdaLR
 
 import torch.nn as nn
@@ -128,3 +133,125 @@ def get_exponential_decay_scheduler(optimizer, decay_rate: float, decay_step: in
         return decay_rate ** (current_step / decay_step)
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)
+
+
+def plot_masks(inputs: torch.Tensor,
+               aggregated_mask: torch.Tensor,
+               masks=None,
+               feature_names: Optional[List[str]] = None,
+               labels: Optional[torch.Tensor] = None,
+               cmap: str = "viridis",
+               # cmap: str = "binary",
+               alpha: float = 1.0,
+               out_fname: str = str(uuid.uuid4()),
+               out_path: str = str(tempfile.mkdtemp()),
+               show: bool = False,
+               nr_samples: int = 20,
+               normalize_inputs: bool = True,
+               ) -> str:
+    if masks is None:
+        masks = []
+
+    inputs = inputs.detach().cpu()
+    normalized_inputs = (inputs.float() - inputs.float().mean(dim=0)) / inputs.float().std(dim=0)
+
+    inputs = inputs[:nr_samples, ...]
+    normalized_inputs = normalized_inputs[:nr_samples, ...]
+    aggregated_mask = aggregated_mask.detach().cpu()[:nr_samples, ...]
+    masks = [m.detach().cpu()[:nr_samples, ...] for m in masks] if masks is not None else None
+
+    # cmap = plt.cm.get_cmap(cmap).reversed()
+
+    plt.tight_layout()
+
+    ratio = inputs.shape[0] / inputs.shape[1]
+    offset = 3 if normalize_inputs else 2
+    nr_figures = offset + len(masks)
+
+    w, h = figaspect(inputs) * 2  # * len(inputs) / 10
+    fig, axes = plt.subplots(nrows=nr_figures,
+                             ncols=1 if labels is None else 2,
+                             figsize=(w, h * nr_figures),
+                             gridspec_kw={
+                                 "width_ratios": [0.9, 0.1],
+                                 # "wspace": 0.01,
+                             } if labels is not None else None)
+    axes = np.expand_dims(axes, axis=1) if len(axes.shape) == 1 else axes
+
+    axes[0, 0].set_title("inputs")
+    axes[0, 0].set_ylabel("sample #")
+    pos = axes[0, 0].imshow(inputs, cmap=cmap, alpha=alpha, interpolation="none")
+    fig.colorbar(pos, fraction=0.047 * ratio, ax=axes[0, 0])
+
+    # only label x axis with features if under a defined nr of features
+    if inputs.numel() < 1000:
+        if feature_names:
+            assert len(feature_names) == inputs.shape[
+                -1], f"number of feature names {len(feature_names)} does not match the input features size {inputs.shape[-1]}"
+            axes[0, 0].set_xticks(list(range(len(feature_names))))
+            axes[0, 0].set_xticklabels(feature_names, rotation=45, ha="right", color="black", rotation_mode="anchor")
+            axes[0, 0].set_xlabel("feature")
+        else:
+            axes[0, 0].set_xticks(list(range(inputs.shape[-1])))
+            axes[0, 0].set_xticklabels(list(range(inputs.shape[-1])), rotation=45, ha="right", color="black", rotation_mode="anchor")
+            axes[0, 0].set_xlabel("feature #")
+    else:
+        axes[0, 0].set_xlabel("feature #")
+
+    if normalize_inputs:
+        axes[1, 0].set_title("normalized inputs")
+        axes[1, 0].set_ylabel("sample #")
+        pos = axes[1, 0].imshow(normalized_inputs, cmap=cmap, alpha=alpha, interpolation="none")
+        fig.colorbar(pos, fraction=0.047 * ratio, ax=axes[1, 0])
+
+    axes[offset - 1, 0].set_title("aggregated mask")
+    axes[offset - 1, 0].set_ylabel("sample #")
+    pos = axes[offset - 1, 0].imshow(aggregated_mask, cmap=cmap, alpha=alpha, interpolation="none")
+    fig.colorbar(pos, fraction=0.047 * ratio, ax=axes[offset - 1, 0])
+    axes[offset - 1, 0].set_xlabel("mask entry #")
+
+    for i, m in enumerate(masks):
+        axes[i + offset, 0].set_title("mask" + str(i))
+        axes[i + offset, 0].set_ylabel("sample #")
+        pos = axes[i + offset, 0].imshow(m, cmap=cmap, alpha=alpha, interpolation="none")
+        fig.colorbar(pos, fraction=0.047 * ratio, ax=axes[i + offset, 0])
+        axes[i + offset, 0].set_xlabel("mask entry #")
+
+    if labels is not None:
+        labels = labels.detach().cpu()[:nr_samples, ...]
+        labels = labels.unsqueeze(dim=-1)
+
+        for i in range(nr_figures):
+            axes[i, 1].set_title("labels")
+            axes[i, 1].set_ylabel("sample #")
+            pos = axes[i, 1].imshow(labels, cmap=cmap, alpha=alpha, interpolation="none")
+            fig.colorbar(pos, fraction=0.047 * ratio, ax=axes[i, 1])
+
+    if show:
+        plt.show()
+
+    path = out_path + "/" + out_fname + ".png"
+    plt.savefig(path)
+
+    return path
+
+
+if __name__ == "__main__":
+    from datasets import CovTypeDataModule
+
+    size = (100, 512)
+    nr_samples = 50
+
+    inputs = torch.randint(0, 2, size=size)
+    labels = torch.randint(0, 8, size=(size[0],))
+    mask = torch.rand(size)
+    masks = [torch.rand(size) for _ in range(4)]
+
+    # plot_masks(inputs, mask, masks, feature_names=CovTypeDataModule.ALL_COLUMNS)
+    print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=None, normalize_inputs=False, show=True))
+
+    print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, masks=masks, normalize_inputs=False, show=True))
+    print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, masks=masks, normalize_inputs=True, show=True))
+
+    print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, normalize_inputs=False, show=True))
+    print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, normalize_inputs=True, show=True))
