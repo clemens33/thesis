@@ -9,7 +9,8 @@ from torchmetrics import MetricCollection, Accuracy, AUROC
 
 from tabnet import TabNet
 from tabnet_lightning.metrics import Sparsity
-from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler, StackedEmbedding, MultiEmbedding
+from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler, StackedEmbedding, MultiEmbedding, \
+    plot_masks
 
 
 class TabNetClassifier(pl.LightningModule):
@@ -46,7 +47,8 @@ class TabNetClassifier(pl.LightningModule):
                  #
                  log_sparsity: str = None,
                  log_parameters: bool = True,
-                 log_masks: str = None,
+                 log_masks: dict = None,
+                 log_metrics: bool = True,
                  #
                  **kwargs
                  ):
@@ -214,15 +216,19 @@ class TabNetClassifier(pl.LightningModule):
         self.log("val/loss", loss, prog_bar=True)
 
         output = self.val_metrics(probs, labels)
-        self.log_dict(output, prog_bar=True)
+
+        if self.log_metrics:
+            self.log_dict(output, prog_bar=True)
 
         self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="val")
 
-        # return {
-        #     "inputs": batch[0],
-        #     "aggregated_mask": mask,
-        #     "masks": masks
-        # }
+        if self.log_masks is not None:
+            return {
+                "inputs": batch[0],
+                "labels": batch[1],
+                "mask": mask,
+                "masks": masks,
+            }
 
     def validation_epoch_end(self, outputs: List[Any]):
 
@@ -236,26 +242,75 @@ class TabNetClassifier(pl.LightningModule):
         self.log("test/loss", loss)
 
         output = self.test_metrics(probs, labels)
-        self.log_dict(output)
+
+        if self.log_metrics:
+            self.log_dict(output)
 
         self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="test")
+
+        if self.log_masks is not None:
+            return {
+                "inputs": batch[0],
+                "labels": batch[1],
+                "mask": mask,
+                "masks": masks,
+            }
 
     def test_epoch_end(self, outputs: List[Any]):
         self.test_metrics.reset()
 
         self._log_sparsity(prefix="test", compute=True)
 
+        if self.log_masks.get("on_test_epoch_end", False):
+            self._log_masks(outputs)
+
+    def _log_masks(self, outputs: List[Any]):
+        if self.log_masks is not None:
+
+            nr_samples = self.log_masks.get("nr_samples", 20)
+            normalize_inputs = self.log_masks.get("normalize_inputs", False)
+            verbose = self.log_masks.get("verbose", False)
+            feature_names = self.log_masks.get("feature_names", None)
+            out_fname = self.log_masks.get("out_fname", None)
+
+            inputs = torch.cat([o["inputs"] for o in outputs], dim=0)
+            labels = torch.cat([o["labels"] for o in outputs], dim=0)
+            mask = torch.cat([o["mask"] for o in outputs], dim=0)
+
+            masks = []
+            for i in range(len(outputs[0]["masks"])):
+                masks.append(torch.cat([o["masks"][i] for o in outputs], dim=0))
+
+            kwargs = {"out_fname": out_fname} if out_fname else {}
+            path = plot_masks(inputs=inputs,
+                              aggregated_mask=mask,
+                              labels=labels,
+                              masks=masks if verbose else None,
+                              nr_samples=nr_samples,
+                              feature_names=feature_names,
+                              normalize_inputs=normalize_inputs,
+                              **kwargs)
+
+            run_id = self.logger.run_id
+            self.logger.experiment.log_artifact(run_id=run_id, local_path=path)
+
     def _log_parameters(self):
-        """logs the gamma and alphas parameters if available"""
+        """logs the gamma, alphas and other parameters if available"""
         if self.log_parameters:
 
-            gammas, alphas = [], []
+            gammas, alphas, slopes = [], [], []
             for i, step in enumerate(self.encoder.steps):
                 gammas.append(step.attentive_transformer.gamma)
                 alphas.append(step.attentive_transformer.attentive.alpha)
 
+                if step.attentive_transformer.attentive.attentive_type == "binary_mask":
+                    slopes.append(step.attentive_transformer.attentive.attentive.activation.slope)
+                else:
+                    slopes.append(0.0)
+
             self.log("gamma", torch.mean(torch.Tensor(gammas)), on_step=True, on_epoch=False)
             self.log("alpha", torch.mean(torch.Tensor(alphas)), on_step=True, on_epoch=False)
+            self.log("slope", torch.mean(torch.Tensor(slopes)), on_step=True, on_epoch=False)
 
             # only log individual gammas and alphas if they are not the same
             if gammas[0] != gammas[-1]:
@@ -265,6 +320,10 @@ class TabNetClassifier(pl.LightningModule):
             if alphas[0] != alphas[-1]:
                 for i, alpha in enumerate(alphas):
                     self.log("alpha_step" + str(i), alpha, on_step=True, on_epoch=False)
+
+            if slopes[0] != slopes[-1]:
+                for i, slope in enumerate(slopes):
+                    self.log("slope_step" + str(i), slope, on_step=True, on_epoch=False)
 
     def _log_sparsity(self, prefix: str, compute: bool = False, inputs: Optional[torch.Tensor] = None, mask: Optional[torch.Tensor] = None,
                       masks: Optional[List[torch.Tensor]] = None):

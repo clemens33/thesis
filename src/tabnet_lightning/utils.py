@@ -161,21 +161,17 @@ def plot_masks(inputs: torch.Tensor,
     masks = [m.detach().cpu()[:nr_samples, ...] for m in masks] if masks is not None else None
 
     # cmap = plt.cm.get_cmap(cmap).reversed()
-
     plt.tight_layout()
 
     ratio = inputs.shape[0] / inputs.shape[1]
     offset = 3 if normalize_inputs else 2
+    offset = offset + 1 if masks else offset
     nr_figures = offset + len(masks)
 
     w, h = figaspect(inputs) * 2  # * len(inputs) / 10
     fig, axes = plt.subplots(nrows=nr_figures,
-                             ncols=1 if labels is None else 2,
-                             figsize=(w, h * nr_figures),
-                             gridspec_kw={
-                                 "width_ratios": [0.9, 0.1],
-                                 # "wspace": 0.01,
-                             } if labels is not None else None)
+                             ncols=1,
+                             figsize=(w, h * nr_figures))
     axes = np.expand_dims(axes, axis=1) if len(axes.shape) == 1 else axes
 
     axes[0, 0].set_title("inputs")
@@ -184,32 +180,45 @@ def plot_masks(inputs: torch.Tensor,
     fig.colorbar(pos, fraction=0.047 * ratio, ax=axes[0, 0])
 
     # only label x axis with features if under a defined nr of features
-    if inputs.numel() < 1000:
+    if inputs.numel() < 2000:
+
         if feature_names:
             assert len(feature_names) == inputs.shape[
                 -1], f"number of feature names {len(feature_names)} does not match the input features size {inputs.shape[-1]}"
             axes[0, 0].set_xticks(list(range(len(feature_names))))
-            axes[0, 0].set_xticklabels(feature_names, rotation=45, ha="right", color="black", rotation_mode="anchor")
+            axes[0, 0].set_xticklabels(feature_names, rotation=45, ha="right", color="black", rotation_mode="anchor", fontsize=8)
             axes[0, 0].set_xlabel("feature")
         else:
             axes[0, 0].set_xticks(list(range(inputs.shape[-1])))
-            axes[0, 0].set_xticklabels(list(range(inputs.shape[-1])), rotation=45, ha="right", color="black", rotation_mode="anchor")
+            axes[0, 0].set_xticklabels(list(range(inputs.shape[-1])), rotation=45, ha="right", color="black", rotation_mode="anchor", fontsize=8)
             axes[0, 0].set_xlabel("feature #")
     else:
         axes[0, 0].set_xlabel("feature #")
 
+    # show normalized inputs
     if normalize_inputs:
         axes[1, 0].set_title("normalized inputs")
         axes[1, 0].set_ylabel("sample #")
         pos = axes[1, 0].imshow(normalized_inputs, cmap=cmap, alpha=alpha, interpolation="none")
         fig.colorbar(pos, fraction=0.047 * ratio, ax=axes[1, 0])
 
+    # summed masks
+    if masks:
+        summed_mask = torch.stack(masks, dim=0).sum(dim=0)
+        axes[offset - 2, 0].set_title("summed mask")
+        axes[offset - 2, 0].set_ylabel("sample #")
+        pos = axes[offset - 2, 0].imshow(summed_mask, cmap=cmap, alpha=alpha, interpolation="none")
+        fig.colorbar(pos, fraction=0.047 * ratio, ax=axes[offset - 2, 0])
+        axes[offset - 2, 0].set_xlabel("mask entry #")
+
+    # aggregated mask
     axes[offset - 1, 0].set_title("aggregated mask")
     axes[offset - 1, 0].set_ylabel("sample #")
     pos = axes[offset - 1, 0].imshow(aggregated_mask, cmap=cmap, alpha=alpha, interpolation="none")
     fig.colorbar(pos, fraction=0.047 * ratio, ax=axes[offset - 1, 0])
     axes[offset - 1, 0].set_xlabel("mask entry #")
 
+    # individual masks
     for i, m in enumerate(masks):
         axes[i + offset, 0].set_title("mask" + str(i))
         axes[i + offset, 0].set_ylabel("sample #")
@@ -217,15 +226,18 @@ def plot_masks(inputs: torch.Tensor,
         fig.colorbar(pos, fraction=0.047 * ratio, ax=axes[i + offset, 0])
         axes[i + offset, 0].set_xlabel("mask entry #")
 
+    # labels as y ticks
     if labels is not None:
         labels = labels.detach().cpu()[:nr_samples, ...]
-        labels = labels.unsqueeze(dim=-1)
+        labels = [str(l.item()) for l in labels]
+        #labels = labels.unsqueeze(dim=-1)
 
         for i in range(nr_figures):
-            axes[i, 1].set_title("labels")
-            axes[i, 1].set_ylabel("sample #")
-            pos = axes[i, 1].imshow(labels, cmap=cmap, alpha=alpha, interpolation="none")
-            fig.colorbar(pos, fraction=0.047 * ratio, ax=axes[i, 1])
+            axes[i, 0].yaxis.tick_right()
+            axes[i, 0].yaxis.set_label_position("right")
+            axes[i, 0].set_ylabel("labels")
+            axes[i, 0].set_yticks(list(range(len(labels))))
+            axes[i, 0].set_yticklabels(labels, fontsize=8)
 
     if show:
         plt.show()
@@ -239,8 +251,8 @@ def plot_masks(inputs: torch.Tensor,
 if __name__ == "__main__":
     from datasets import CovTypeDataModule
 
-    size = (100, 512)
-    nr_samples = 50
+    size = (100, 57)
+    nr_samples = 20
 
     inputs = torch.randint(0, 2, size=size)
     labels = torch.randint(0, 8, size=(size[0],))
