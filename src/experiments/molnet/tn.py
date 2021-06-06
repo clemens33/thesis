@@ -132,18 +132,18 @@ def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
 
     # trainer/logging args
-    args.experiment_name = "bbbp_test1"
+    args.experiment_name = "bbbp_tn_man1"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
-    args.max_steps = 1000
+    args.max_steps = 200
     args.seed = 0
-    args.patience = 50
+    args.patience = 100
 
     # data module args
     args.data_name = "bbbp"
     args.batch_size = 256
     args.split_seed = 0
-    # args.n_bits = 12288
-    args.radius = 6
+    args.n_bits = 1024
+    args.radius = 4
     args.chirality = True
     args.features = True
     # args.noise_features = {
@@ -152,44 +152,46 @@ def manual_args(args: Namespace) -> Namespace:
     #     "position": "random",
     # }
     # args.noise = "zeros_standard_normal2"
-    args.featurizer_name = "rdkit"
+    args.featurizer_name = "ecfp"
 
-    args.num_workers = 8
+    args.num_workers = 4
     args.cache_dir = "../../../" + "data/molnet/bbbp/"
 
     # model args
-    args.decision_size = 16
+    args.decision_size = 32
     args.feature_size = args.decision_size * 2
     args.nr_layers = 2
     args.nr_shared_layers = 2
-    args.nr_steps = 6
-    args.gamma = 1.2
-    # args.gamma_shared_trainable = True
-    args.gamma_trainable = True
+    args.nr_steps = 8
+    args.gamma = 3.0
+
+    #args.relaxation_type = "gamma_trainable"
     args.alpha = 2.0
-    args.attentive_type = "sparsemax"
-    # args.alpha_shared_trainable = True
+    args.attentive_type = "binary_mask"
+    args.slope = 3.0
+    args.slope_type = "slope_fixed"
+
     # args.lambda_sparse = 1e-6
     # args.lambda_sparse = 0.1
     args.lambda_sparse = 0.001
 
-    args.virtual_batch_size = 32  # -1 do not use any batch normalization
-    # args.virtual_batch_size = -1  # -1 do not use any batch normalization
-    args.normalize_input = True
+    #args.virtual_batch_size = 32  # -1 do not use any batch normalization
+    args.virtual_batch_size = -1  # -1 do not use any batch normalization
+    #args.normalize_input = True
 
-    # args.normalize_input = True
+    args.normalize_input = False
     # args.virtual_batch_size = 256  # -1 do not use any batch normalization
 
-    args.lr = 0.01
+    args.lr = 0.0013033727164701418
     args.optimizer = "adam"
-    args.scheduler = "exponential_decay"
-    args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
+    #args.scheduler = "exponential_decay"
+    #args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
 
     # args.optimizer="adamw"
     # args.optimizer_params={"weight_decay": 0.0001}
-    # args.scheduler = "linear_with_warmup"
+    args.scheduler = "linear_with_warmup"
     # args.scheduler_params = {"warmup_steps": 10}
-    # args.scheduler_params={"warmup_steps": 0.05}
+    args.scheduler_params={"warmup_steps": 0.01}
 
     # args.index_embeddings = True
     # args.categorical_embeddings = True
@@ -199,7 +201,7 @@ def manual_args(args: Namespace) -> Namespace:
     # args.embedding_dims = [1] * args.n_bits
 
     # args.log_sparsity = "verbose"
-    args.log_sparsity = True
+    args.log_sparsity = "verbose"
     args.log_parameters = True
 
     return args

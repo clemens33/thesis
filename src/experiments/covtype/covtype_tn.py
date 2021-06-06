@@ -128,14 +128,14 @@ def manual_args(args: Namespace) -> Namespace:
     args.nr_shared_layers = 2
     args.nr_steps = 5
     args.gamma = 1.5
-    #args.gamma_trainable = True
-    args.gamma_shared_trainable = True
-    #args.lambda_sparse = 0.0001
+    args.relaxation_type = "gamma_shared_trainable"
+    args.attentive_type = "binary_mask"
+    args.slope = 3.0
+
+    args.lambda_sparse = 0.0001
     #args.lambda_sparse = 0.0
 
-    args.alpha = 1.5
-    #args.alpha_trainable = True
-    #args.alpha_shared_trainable = True
+    #args.alpha = 1.5
 
     args.virtual_batch_size = 512
     args.momentum = 0.3

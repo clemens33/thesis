@@ -40,7 +40,7 @@ def manual_args(args: Namespace) -> Namespace:
         # {"name": "virtual_batch_size", "type": "choice", "values": [-1, 8, 32, 64, 512]},
         # {"name": "momentum", "type": "choice", "values": [0.4, 0.3, 0.2, 0.1, 0.05, 0.02]},
 
-        {"name": "lambda_sparse", "type": "choice", "values": [0.0, 1e-6, 1e-4, 1e-3, 0.01, 0.1]},
+        #{"name": "lambda_sparse", "type": "choice", "values": [0.0, 1e-6, 1e-4, 1e-3, 0.01, 0.1]},
         # {"name": "lr", "type": "choice", "values": [0.005, 0.01, 0.02, 0.025]},
         {"name": "lr", "type": "range", "bounds": [1e-5, 0.01], "log_scale": True},
 
@@ -50,23 +50,23 @@ def manual_args(args: Namespace) -> Namespace:
     ]
 
     # trainer/logging args
-    args.experiment_name = "bbbp_tn_1024_4_ax2"
+    args.experiment_name = "bbbp_tn_12288_4_SM_ax1"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
-    args.max_steps = 2000
+    args.max_steps = 1000
     args.seed = 0
-    args.patience = 100
+    args.patience = 50
 
     # data module args
     args.data_name = "bbbp"
     args.batch_size = 256
     args.split_seed = 0
-    args.n_bits = 1024
+    args.n_bits = 12288
     args.radius = 4
     args.chirality = True
     args.features = True
     args.featurizer_name = "ecfp"
 
-    args.num_workers = 8
+    args.num_workers = 4
     args.cache_dir = "../../../" + "data/molnet/bbbp/"
 
     # model args
@@ -75,18 +75,23 @@ def manual_args(args: Namespace) -> Namespace:
     args.nr_layers = 2
     args.nr_shared_layers = 2
     args.nr_steps = 6
-    args.alpha = -2.0
+    # args.alpha = 2.0
+    args.relaxation_type = "gamma_fixed"
+    args.attentive_type = "softmax"
+    #args.slope = 3.0
+    #args.slope = 3.0
     # args.alpha_trainable = True
-    args.gamma = 1.5
+    args.gamma = 1.0
+    # args.relaxation_type = "gamma_shared_trainable"
     # args.gamma_shared_trainable = True
     # args.gamma_trainable = True
-    args.lambda_sparse = 1e-6
+    args.lambda_sparse = 0.0
 
-    args.virtual_batch_size = 256  # -1 do not use any batch normalization
-    # args.virtual_batch_size = -1
-    args.momentum = 0.1
-    # args.normalize_input = False
-    args.normalize_input = True
+    # args.virtual_batch_size = 256  # -1 do not use any batch normalization
+    args.virtual_batch_size = -1
+    # args.momentum = 0.1
+    args.normalize_input = False
+    # args.normalize_input = True
 
     args.lr = 0.001
     args.optimizer = "adam"
@@ -96,8 +101,8 @@ def manual_args(args: Namespace) -> Namespace:
     # args.optimizer = "adamw"
     # args.optimizer_params = {"weight_decay": 0.0001}
     args.scheduler = "linear_with_warmup"
-    args.scheduler_params = {"warmup_steps": 10}
-    # args.scheduler_params = {"warmup_steps": 0.1}
+    # args.scheduler_params = {"warmup_steps": 10}
+    args.scheduler_params = {"warmup_steps": 0.01}
 
     # args.index_embeddings = True
     # args.categorical_embeddings = True
