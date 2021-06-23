@@ -5,7 +5,7 @@ from tabnet_lightning import TabNetClassifier
 
 
 class IndexEmbTabNetClassifier(TabNetClassifier):
-    """implementation using index based embeddings"""
+    """test model implementation using index based embeddings"""
 
     def __init__(self, **kwargs):
         super(IndexEmbTabNetClassifier, self).__init__(**kwargs)

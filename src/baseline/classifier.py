@@ -106,8 +106,8 @@ class MLPClassifier(pl.LightningModule):
         metrics = MetricCollection([
             # Accuracy(num_classes=num_classes),
             # AUROC(num_classes=num_classes, average="macro"),
-            Accuracy(),
-            AUROC(average="macro"),
+            Accuracy() if num_classes == 2 else Accuracy(num_classes=num_classes),
+            AUROC() if num_classes == 2 else AUROC(num_classes=num_classes, average="macro"),
             # TODO check -> leads to memory leak (atm fixed by calling reset in epoch end callbacks)
         ])
 
