@@ -137,7 +137,7 @@ def get_exponential_decay_scheduler(optimizer, decay_rate: float, decay_step: in
 
 def plot_masks(inputs: torch.Tensor,
                aggregated_mask: torch.Tensor,
-               masks=None,
+               masks: Optional[List[torch.Tensor]] = None,
                feature_names: Optional[List[str]] = None,
                labels: Optional[torch.Tensor] = None,
                cmap: str = "viridis",
@@ -190,7 +190,8 @@ def plot_masks(inputs: torch.Tensor,
             axes[0, 0].set_xlabel("feature")
         else:
             axes[0, 0].set_xticks(list(range(inputs.shape[-1])))
-            axes[0, 0].set_xticklabels(list(range(inputs.shape[-1])), rotation=45, ha="right", color="black", rotation_mode="anchor", fontsize=8)
+            axes[0, 0].set_xticklabels(list(range(inputs.shape[-1])), rotation=45, ha="right", color="black", rotation_mode="anchor",
+                                       fontsize=8)
             axes[0, 0].set_xlabel("feature #")
     else:
         axes[0, 0].set_xlabel("feature #")
@@ -230,7 +231,7 @@ def plot_masks(inputs: torch.Tensor,
     if labels is not None:
         labels = labels.detach().cpu()[:nr_samples, ...]
         labels = [str(l.item()) for l in labels]
-        #labels = labels.unsqueeze(dim=-1)
+        # labels = labels.unsqueeze(dim=-1)
 
         for i in range(nr_figures):
             axes[i, 0].yaxis.tick_right()
@@ -248,22 +249,117 @@ def plot_masks(inputs: torch.Tensor,
     return path
 
 
+def plot_rankings(mask: torch.Tensor,
+                  feature_names: Optional[List[str]] = None,
+                  descending: bool = True,
+                  show: bool = False,
+                  plot_std: bool = True,
+                  top_k: Optional[int] = None,
+                  out_fname: str = str(uuid.uuid4()),
+                  out_path: str = str(tempfile.mkdtemp())
+                  ) -> str:
+    feature_names = ["na" for i in range(mask.shape[-1])] if feature_names is None else feature_names
+    feature_names = [f"{name}/{str(i)}" for i, name in enumerate(feature_names)]
+
+    assert mask.shape[-1] == len(
+        feature_names), f"number of feature names {len(feature_names)} must match feature dimensions {mask.shape[-1]}"
+
+    mask = mask.detach().cpu()
+    top_k = len(feature_names) if top_k is None else min(len(feature_names), top_k)
+
+    fa_mean = torch.mean(mask, dim=0)
+    fa_std = torch.std(mask, dim=0)
+
+    sorted_fa_mean, indices = torch.sort(fa_mean, descending=not descending)
+    sorted_fa_std = fa_std[indices]
+
+    feature_names = np.array(feature_names)[indices]
+
+    sorted_fa_mean = sorted_fa_mean[:top_k]
+    sorted_fa_std = sorted_fa_std[:top_k]
+    feature_names = feature_names[:top_k]
+
+    # normalize
+    s = sorted_fa_mean.sum()
+    sorted_fa_mean = (sorted_fa_mean / s) * 100
+    sorted_fa_std = (sorted_fa_std / s) * 100
+
+    h = max(4, int(top_k / 2))
+    w = max(6, int(h / 3))
+    fig, ax = plt.subplots(figsize=(w, h))
+
+    ax.barh(np.arange(len(feature_names)),
+            sorted_fa_mean,
+            xerr=sorted_fa_std if plot_std else None,
+            color="tab:blue",
+            alpha=0.6,
+            error_kw={
+                "elinewidth": 0.8,
+                "alpha": 0.5
+            })
+
+    ax.set_ylabel("feature name / dimension")
+    ax.set_yticks(np.arange(len(feature_names)))
+    ax.set_yticklabels(feature_names)
+
+    for i, v in enumerate(sorted_fa_mean):
+        ax.text(v, i, f"{v.item():.2f}%", va="bottom")
+
+    ax.set_xlabel("mean +/- std feature importance in %")
+    ax.set_title(f"feature importance/ranking - top {top_k}")
+
+    plt.tight_layout()
+
+    fig1 = plt.gcf()
+
+    if show:
+        plt.show()
+
+    path = out_path + "/" + out_fname + ".png"
+    fig1.savefig(path, transparent=False)
+
+    return path
+
+
 if __name__ == "__main__":
-    from datasets import CovTypeDataModule
-
-    size = (100, 57)
-    nr_samples = 20
-
-    inputs = torch.randint(0, 2, size=size)
-    labels = torch.randint(0, 8, size=(size[0],))
-    mask = torch.rand(size)
-    masks = [torch.rand(size) for _ in range(4)]
+    # from datasets import CovTypeDataModule
+    #
+    # size = (100, 55)
+    # nr_samples = 20
+    #
+    # inputs = torch.randint(0, 2, size=size)
+    # labels = torch.randint(0, 8, size=(size[0],))
+    # mask = torch.rand(size)
+    #
+    # masks = [torch.rand(size) for _ in range(4)]
+    #
 
     # plot_masks(inputs, mask, masks, feature_names=CovTypeDataModule.ALL_COLUMNS)
-    print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=None, normalize_inputs=False, show=True))
+    # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=None, normalize_inputs=False, show=True))
 
-    print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, masks=masks, normalize_inputs=False, show=True))
-    print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, masks=masks, normalize_inputs=True, show=True))
+    # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, masks=masks, normalize_inputs=False, show=True))
+    # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, masks=masks, normalize_inputs=True, show=True))
+    #
+    # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, normalize_inputs=False, show=True))
+    # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, normalize_inputs=True, show=True))
 
-    print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, normalize_inputs=False, show=True))
-    print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, normalize_inputs=True, show=True))
+    from datasets import CovTypeDataModule
+
+    size = (100, 10)
+
+    mask = torch.randint(0, 10, size=size).float()
+    # feature_names = CovTypeDataModule.ALL_COLUMNS[:10]
+
+    plot_rankings(mask, show=True, plot_std=False, top_k=100)
+
+    feature_names = CovTypeDataModule.ALL_COLUMNS[:5]
+    mask = torch.Tensor([
+        [10, 0, 0, 0, 1],
+        [11, 0, 0, 3, 0],
+        [11, 0, 0, 0, 1],
+        [12, 0, 0, 1, 0],
+        [10, 0, 0, 10, 2],
+    ])
+
+    path = plot_rankings(mask, feature_names=feature_names, show=True, plot_std=True, top_k=100)
+    print(path)

@@ -10,7 +10,7 @@ from torchmetrics import MetricCollection, Accuracy, AUROC
 from tabnet import TabNet
 from tabnet_lightning.metrics import Sparsity
 from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler, StackedEmbedding, MultiEmbedding, \
-    plot_masks
+    plot_masks, plot_rankings
 
 
 class TabNetClassifier(pl.LightningModule):
@@ -47,8 +47,9 @@ class TabNetClassifier(pl.LightningModule):
                  #
                  log_sparsity: str = None,
                  log_parameters: bool = True,
-                 log_masks: dict = None,
+                 log_masks=None,
                  log_metrics: bool = True,
+                 log_rankings=None,
                  #
                  **kwargs
                  ):
@@ -83,6 +84,11 @@ class TabNetClassifier(pl.LightningModule):
             **kwargs: optional tabnet parameters
         """
         super(TabNetClassifier, self).__init__()
+
+        if log_rankings is None:
+            log_rankings = {}
+        if log_masks is None:
+            log_masks = {}
 
         self.num_classes = num_classes
         self.lambda_sparse = lambda_sparse
@@ -152,6 +158,8 @@ class TabNetClassifier(pl.LightningModule):
 
         self.log_parameters = log_parameters
         self.log_masks = log_masks
+        self.log_metrics = log_metrics
+        self.log_rankings = log_rankings
 
         self.save_hyperparameters()
 
@@ -263,6 +271,23 @@ class TabNetClassifier(pl.LightningModule):
 
         if self.log_masks.get("on_test_epoch_end", False):
             self._log_masks(outputs)
+
+        if self.log_rankings.get("on_test_epoch_end", False):
+            self._log_rankings(outputs)
+
+    def _log_rankings(self, outputs: List[Any]):
+        if self.log_rankings:
+            top_k = self.log_rankings.get("top_k", None)
+            feature_names = self.log_rankings.get("feature_names", None)
+            out_fname = self.log_rankings.get("out_fname", None)
+
+            mask = torch.cat([o["mask"] for o in outputs], dim=0)
+
+            kwargs = {"out_fname": out_fname} if out_fname else {}
+
+            path = plot_rankings(mask, feature_names=feature_names, top_k=top_k, **kwargs)
+            run_id = self.logger.run_id
+            self.logger.experiment.log_artifact(run_id=run_id, local_path=path)
 
     def _log_masks(self, outputs: List[Any]):
         if self.log_masks is not None:

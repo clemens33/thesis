@@ -44,11 +44,15 @@ def plot_tn(args: Namespace):
 
     trainer = TabNetTrainer(gpus=1, logger=mlf_logger)
 
-    # gets the best validation metrics
     classifier.log_masks = args.log_masks
     classifier.log_masks["feature_names"] = CovTypeDataModule.FEATURE_COLUMNS
-    classifier.log_masks["out_fname"] = "validation_dataset_" + args.checkpoint_name.split(".")[0]
+    classifier.log_masks["out_fname"] = "masks_" + "validation_dataset_" + args.checkpoint_name.split(".")[0]
 
+    classifier.log_rankings = args.log_rankings
+    classifier.log_rankings["feature_names"] = CovTypeDataModule.FEATURE_COLUMNS
+    classifier.log_rankings["out_fname"] = "ranks_" + "validation_dataset_" + args.checkpoint_name.split(".")[0]
+
+    # gets the best validation metrics
     r = trainer.test(model=classifier, test_dataloaders=dm.val_dataloader())
     results_val_best = {}
     for k, v in r[0].items():
@@ -60,7 +64,9 @@ def plot_tn(args: Namespace):
         if "val" in k:
             results_val_last[k] = v.item() if isinstance(v, torch.Tensor) else v
 
-    classifier.log_masks["out_fname"] = "test_dataset" + args.checkpoint_name.split(".")[0]
+    classifier.log_masks["out_fname"] = "masks_" + "test_dataset_" + args.checkpoint_name.split(".")[0]
+    classifier.log_rankings["out_fname"] = "ranks_" + "test_dataset_" + args.checkpoint_name.split(".")[0]
+
     results_test = trainer.test(model=classifier, test_dataloaders=dm.test_dataloader())
 
     return results_test[0], results_val_best, results_val_last, classifier, trainer, dm
@@ -72,9 +78,9 @@ def manual_args(args: Namespace) -> Namespace:
     # logger/plot params
     args.experiment_name = "covtype_tn1"
     args.experiment_id = "39"
-    args.run_id = "5ef1b10d495340a89d5b0a3aee4b410a"
+    args.run_id = "3928ad8a8f084ba987d1aaa9f6d3704f"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
-    args.checkpoint_name = "epoch=859-step=16339.ckpt"
+    args.checkpoint_name = "epoch=2006-step=38132.ckpt"
     args.checkpoint_path = "./" + args.experiment_id + "/" + args.run_id + "/checkpoints/"
 
     args.max_steps = 1000000
@@ -93,6 +99,13 @@ def manual_args(args: Namespace) -> Namespace:
         "out_fname": "masks",
         "verbose": True,
     }
+
+    args.log_rankings = {
+        "on_test_epoch_end": True,
+        "top_k": 100,
+        "out_fname": "rankings",
+    }
+
     args.log_metrics = False
     args.log_sparsity = False
     # args.log_parameters = True

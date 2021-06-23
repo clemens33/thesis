@@ -69,9 +69,6 @@ class CovTypeDataModule(pl.LightningDataModule):
                 with open(self.cache_dir + CovTypeDataModule.FILENAME, "wb") as f_out:
                     shutil.copyfileobj(f_in, f_out)
 
-        # not necessary - no na values/or other issues - use raw input features
-        # self._preprocess()
-
         # split if necessary
         if not Path(PurePosixPath(self.cache_dir + "train_" + CovTypeDataModule.FILENAME)).exists() or \
                 not Path(PurePosixPath(self.cache_dir + "val_" + CovTypeDataModule.FILENAME)).exists() or \
