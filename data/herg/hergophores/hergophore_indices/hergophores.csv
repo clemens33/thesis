@@ -1,0 +1,14 @@
+,hergo,group
+0,n1ccccc1,substructures_inactive_binding_10um.txt
+1,n1ccccc1C,substructures_inactive_binding_10um.txt
+2,c1cc(C)ccc1C,substructures_inactive_binding_10um.txt
+3,CCNCc1ccccc1,substructures_inactive_binding_10um.txt
+4,Cc1ccccc1,substructures_inactive_functional_10um.txt
+5,CCOc1ccccc1,substructures_active_binding_10um.txt
+6,c1ccccc1CNCC,substructures_active_binding_10um.txt
+7,c1ccccc1CCNC,substructures_active_binding_1um.txt
+8,c1ccccc1CN2CCCCC2,substructures_active_binding_1um.txt
+9,c1ccccc1Cc1ccccc1,substructures_active_functional_1um.txt
+10,n1ccccc1,substructures_inactive_binding_1um.txt
+11,COc1ccccc1,substructures_inactive_binding_1um.txt
+12,n1ccccc1C,substructures_inactive_binding_1um.txt
