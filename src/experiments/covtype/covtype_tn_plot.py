@@ -44,13 +44,13 @@ def plot_tn(args: Namespace):
 
     trainer = TabNetTrainer(gpus=1, logger=mlf_logger)
 
-    classifier.log_masks = args.log_masks
-    classifier.log_masks["feature_names"] = CovTypeDataModule.FEATURE_COLUMNS
-    classifier.log_masks["out_fname"] = "masks_" + "validation_dataset_" + args.checkpoint_name.split(".")[0]
+    classifier.plot_masks = args.log_masks
+    classifier.plot_masks["feature_names"] = CovTypeDataModule.FEATURE_COLUMNS
+    classifier.plot_masks["out_fname"] = "masks_" + "validation_dataset_" + args.checkpoint_name.split(".")[0]
 
-    classifier.log_rankings = args.log_rankings
-    classifier.log_rankings["feature_names"] = CovTypeDataModule.FEATURE_COLUMNS
-    classifier.log_rankings["out_fname"] = "ranks_" + "validation_dataset_" + args.checkpoint_name.split(".")[0]
+    classifier.plot_rankings = args.log_rankings
+    classifier.plot_rankings["feature_names"] = CovTypeDataModule.FEATURE_COLUMNS
+    classifier.plot_rankings["out_fname"] = "ranks_" + "validation_dataset_" + args.checkpoint_name.split(".")[0]
 
     # gets the best validation metrics
     r = trainer.test(model=classifier, test_dataloaders=dm.val_dataloader())
@@ -64,8 +64,8 @@ def plot_tn(args: Namespace):
         if "val" in k:
             results_val_last[k] = v.item() if isinstance(v, torch.Tensor) else v
 
-    classifier.log_masks["out_fname"] = "masks_" + "test_dataset_" + args.checkpoint_name.split(".")[0]
-    classifier.log_rankings["out_fname"] = "ranks_" + "test_dataset_" + args.checkpoint_name.split(".")[0]
+    classifier.plot_masks["out_fname"] = "masks_" + "test_dataset_" + args.checkpoint_name.split(".")[0]
+    classifier.plot_rankings["out_fname"] = "ranks_" + "test_dataset_" + args.checkpoint_name.split(".")[0]
 
     results_test = trainer.test(model=classifier, test_dataloaders=dm.test_dataloader())
 

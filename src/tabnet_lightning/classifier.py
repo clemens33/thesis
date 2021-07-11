@@ -47,9 +47,10 @@ class TabNetClassifier(pl.LightningModule):
                  #
                  log_sparsity: str = None,
                  log_parameters: bool = True,
-                 log_masks=None,
                  log_metrics: bool = True,
-                 log_rankings=None,
+                 #
+                 plot_masks: Optional[dict] = None,
+                 plot_rankings: Optional[dict] = None,
                  #
                  **kwargs
                  ):
@@ -85,10 +86,10 @@ class TabNetClassifier(pl.LightningModule):
         """
         super(TabNetClassifier, self).__init__()
 
-        if log_rankings is None:
-            log_rankings = {}
-        if log_masks is None:
-            log_masks = {}
+        if plot_rankings is None:
+            plot_rankings = {}
+        if plot_masks is None:
+            plot_masks = {}
 
         self.num_classes = num_classes
         self.lambda_sparse = lambda_sparse
@@ -157,9 +158,10 @@ class TabNetClassifier(pl.LightningModule):
         self._init_sparsity_metrics(self.log_sparsity, nr_steps)
 
         self.log_parameters = log_parameters
-        self.log_masks = log_masks
         self.log_metrics = log_metrics
-        self.log_rankings = log_rankings
+
+        self.plot_masks = plot_masks
+        self.plot_rankings = plot_rankings
 
         self.save_hyperparameters()
 
@@ -230,7 +232,7 @@ class TabNetClassifier(pl.LightningModule):
 
         self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="val")
 
-        if self.log_masks is not None:
+        if self.plot_masks is not None:
             return {
                 "inputs": batch[0],
                 "labels": batch[1],
@@ -256,7 +258,7 @@ class TabNetClassifier(pl.LightningModule):
 
         self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="test")
 
-        if self.log_masks is not None:
+        if self.plot_masks is not None:
             return {
                 "inputs": batch[0],
                 "labels": batch[1],
@@ -269,17 +271,17 @@ class TabNetClassifier(pl.LightningModule):
 
         self._log_sparsity(prefix="test", compute=True)
 
-        if self.log_masks.get("on_test_epoch_end", False):
-            self._log_masks(outputs)
+        if self.plot_masks.get("on_test_epoch_end", False):
+            self._plot_masks(outputs)
 
-        if self.log_rankings.get("on_test_epoch_end", False):
-            self._log_rankings(outputs)
+        if self.plot_rankings.get("on_test_epoch_end", False):
+            self._plot_rankings(outputs)
 
-    def _log_rankings(self, outputs: List[Any]):
-        if self.log_rankings:
-            top_k = self.log_rankings.get("top_k", None)
-            feature_names = self.log_rankings.get("feature_names", None)
-            out_fname = self.log_rankings.get("out_fname", None)
+    def _plot_rankings(self, outputs: List[Any]):
+        if self.plot_rankings:
+            top_k = self.plot_rankings.get("top_k", None)
+            feature_names = self.plot_rankings.get("feature_names", None)
+            out_fname = self.plot_rankings.get("out_fname", None)
 
             mask = torch.cat([o["mask"] for o in outputs], dim=0)
 
@@ -289,14 +291,14 @@ class TabNetClassifier(pl.LightningModule):
             run_id = self.logger.run_id
             self.logger.experiment.log_artifact(run_id=run_id, local_path=path)
 
-    def _log_masks(self, outputs: List[Any]):
-        if self.log_masks is not None:
+    def _plot_masks(self, outputs: List[Any]):
+        if self.plot_masks is not None:
 
-            nr_samples = self.log_masks.get("nr_samples", 20)
-            normalize_inputs = self.log_masks.get("normalize_inputs", False)
-            verbose = self.log_masks.get("verbose", False)
-            feature_names = self.log_masks.get("feature_names", None)
-            out_fname = self.log_masks.get("out_fname", None)
+            nr_samples = self.plot_masks.get("nr_samples", 20)
+            normalize_inputs = self.plot_masks.get("normalize_inputs", False)
+            verbose = self.plot_masks.get("verbose", False)
+            feature_names = self.plot_masks.get("feature_names", None)
+            out_fname = self.plot_masks.get("out_fname", None)
 
             inputs = torch.cat([o["inputs"] for o in outputs], dim=0)
             labels = torch.cat([o["labels"] for o in outputs], dim=0)
