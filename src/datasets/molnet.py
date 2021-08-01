@@ -55,7 +55,7 @@ dataset_loading_functions = {
 
 class MolNetClassifierDataModule(pl.LightningDataModule):
     _names = ["bace_c", "bbbp", "clintox", "hiv", "muv", "pcba", "pcba_146",
-              "pcba_2475", "sider", "tox21", "toxcast"]
+              "pcba_2475", "sider", "tox21", "toxcast", "herg"]
 
     # focus on bbbp, bace_c and tox21
 
