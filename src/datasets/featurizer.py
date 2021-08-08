@@ -1,5 +1,7 @@
+import json
 import warnings
-from typing import Optional, List, Tuple
+from pathlib import PurePosixPath, Path
+from typing import Optional, List, Tuple, Dict, Union
 
 import numpy as np
 from rdkit import Chem
@@ -8,6 +10,8 @@ from sklearn.feature_extraction import DictVectorizer
 
 
 class ECFC_featurizer():
+    """based on the implemenation provided by P. Seidl"""
+
     def __init__(self, radius=6, min_fragm_occur=50, useChirality=True, useFeatures=False):
         self.v = DictVectorizer(sparse=True, dtype=np.uint16)
         self.min_fragm_occur = min_fragm_occur
@@ -181,150 +185,14 @@ class ECFPFeaturizer():
         return atomic_attributions
 
 
-class MACCSFeaturizer():
-    SMARTS_SUBSTR = {
-        8: Chem.MolFromSmarts("[!#6!#1]1~*~*~*~1"),
-        11: Chem.MolFromSmarts("*1~*~*~*~1"),
-        13: Chem.MolFromSmarts("[#8]~[#7](~[#6])~[#6]"),
-        14: Chem.MolFromSmarts("[#16]-[#16]"),
-        15: Chem.MolFromSmarts("[#8]~[#6](~[#8])~[#8]"),
-        16: Chem.MolFromSmarts("[!#6!#1]1~*~*~1"),
-        17: Chem.MolFromSmarts("[#6]#[#6]"),
-        19: Chem.MolFromSmarts("*1~*~*~*~*~*~*~1"),
-        20: Chem.MolFromSmarts("[#14]"),
-        21: Chem.MolFromSmarts("[#6]=[#6](~[!#6!#1])~[!#6!#1]"),
-        22: Chem.MolFromSmarts("*1~*~*~1"),
-        23: Chem.MolFromSmarts("[#7]~[#6](~[#8])~[#8]"),
-        24: Chem.MolFromSmarts("[#7]-[#8]"),
-        25: Chem.MolFromSmarts("[#7]~[#6](~[#7])~[#7]"),
-        26: Chem.MolFromSmarts("[#6]=@[#6](@*)@*"),
-        28: Chem.MolFromSmarts("[!#6!#1]~[CH2]~[!#6!#1]"),
-        30: Chem.MolFromSmarts("[#6]~[!#6!#1](~[#6])(~[#6])~*"),
-        31: Chem.MolFromSmarts("[!#6!#1]~[F,Cl,Br,I]"),
-        32: Chem.MolFromSmarts("[#6]~[#16]~[#7]"),
-        33: Chem.MolFromSmarts("[#7]~[#16]"),
-        34: Chem.MolFromSmarts("[CH2]=*"),
-        36: Chem.MolFromSmarts("[#16R]"),
-        37: Chem.MolFromSmarts("[#7]~[#6](~[#8])~[#7]"),
-        38: Chem.MolFromSmarts("[#7]~[#6](~[#6])~[#7]"),
-        39: Chem.MolFromSmarts("[#8]~[#16](~[#8])~[#8]"),
-        40: Chem.MolFromSmarts("[#16]-[#8]"),
-        41: Chem.MolFromSmarts("[#6]#[#7]"),
-        43: Chem.MolFromSmarts("[!#6!#1!H0]~*~[!#6!#1!H0]"),
-        44: Chem.MolFromSmarts("[!#1;!#6;!#7;!#8;!#9;!#14;!#15;!#16;!#17;!#35;!#53]"),
-        45: Chem.MolFromSmarts("[#6]=[#6]~[#7]"),
-        47: Chem.MolFromSmarts("[#16]~*~[#7]"),
-        48: Chem.MolFromSmarts("[#8]~[!#6!#1](~[#8])~[#8]"),
-        49: Chem.MolFromSmarts("[!+0]"),
-        50: Chem.MolFromSmarts("[#6]=[#6](~[#6])~[#6]"),
-        51: Chem.MolFromSmarts("[#6]~[#16]~[#8]"),
-        52: Chem.MolFromSmarts("[#7]~[#7]"),
-        53: Chem.MolFromSmarts("[!#6!#1!H0]~*~*~*~[!#6!#1!H0]"),
-        54: Chem.MolFromSmarts("[!#6!#1!H0]~*~*~[!#6!#1!H0]"),
-        55: Chem.MolFromSmarts("[#8]~[#16]~[#8]"),
-        56: Chem.MolFromSmarts("[#8]~[#7](~[#8])~[#6]"),
-        57: Chem.MolFromSmarts("[#8R]"),
-        58: Chem.MolFromSmarts("[!#6!#1]~[#16]~[!#6!#1]"),
-        59: Chem.MolFromSmarts("[#16]!:*:*"),
-        60: Chem.MolFromSmarts("[#16]=[#8]"),
-        61: Chem.MolFromSmarts("*~[#16](~*)~*"),
-        62: Chem.MolFromSmarts("*@*!@*@*"),
-        63: Chem.MolFromSmarts("[#7]=[#8]"),
-        64: Chem.MolFromSmarts("*@*!@[#16]"),
-        65: Chem.MolFromSmarts("c:n"),
-        66: Chem.MolFromSmarts("[#6]~[#6](~[#6])(~[#6])~*"),
-        67: Chem.MolFromSmarts("[!#6!#1]~[#16]"),
-        68: Chem.MolFromSmarts("[!#6!#1!H0]~[!#6!#1!H0]"),
-        69: Chem.MolFromSmarts("[!#6!#1]~[!#6!#1!H0]"),
-        70: Chem.MolFromSmarts("[!#6!#1]~[#7]~[!#6!#1]"),
-        71: Chem.MolFromSmarts("[#7]~[#8]"),
-        72: Chem.MolFromSmarts("[#8]~*~*~[#8]"),
-        73: Chem.MolFromSmarts("[#16]=*"),
-        74: Chem.MolFromSmarts("[CH3]~*~[CH3]"),
-        75: Chem.MolFromSmarts("*!@[#7]@*"),
-        76: Chem.MolFromSmarts("[#6]=[#6](~*)~*"),
-        77: Chem.MolFromSmarts("[#7]~*~[#7]"),
-        78: Chem.MolFromSmarts("[#6]=[#7]"),
-        79: Chem.MolFromSmarts("[#7]~*~*~[#7]"),
-        80: Chem.MolFromSmarts("[#7]~*~*~*~[#7]"),
-        81: Chem.MolFromSmarts("[#16]~*(~*)~*"),
-        82: Chem.MolFromSmarts("*~[CH2]~[!#6!#1!H0]"),
-        83: Chem.MolFromSmarts("[!#6!#1]1~*~*~*~*~1"),
-        84: Chem.MolFromSmarts("[NH2]"),
-        85: Chem.MolFromSmarts("[#6]~[#7](~[#6])~[#6]"),
-        86: Chem.MolFromSmarts("[C;H2,H3][!#6!#1][C;H2,H3]"),
-        87: Chem.MolFromSmarts("[F,Cl,Br,I]!@*@*"),
-        89: Chem.MolFromSmarts("[#8]~*~*~*~[#8]"),
-        90: Chem.MolFromSmarts("[$([!#6!#1!H0]~*~*~[CH2]~*),$([!#6!#1!H0R]1@[R]@[R]@[CH2R]1),$([!#6!#1!H0]~[R]1@[R]@[CH2R]1)]"),
-        91: Chem.MolFromSmarts(
-            "[$([!#6!#1!H0]~*~*~*~[CH2]~*),$([!#6!#1!H0R]1@[R]@[R]@[R]@[CH2R]1),$([!#6!#1!H0]~[R]1@[R]@[R]@[CH2R]1),$([!#6!#1!H0]~*~[R]1@[R]@[CH2R]1)]"),
-        92: Chem.MolFromSmarts("[#8]~[#6](~[#7])~[#6]"),
-        93: Chem.MolFromSmarts("[!#6!#1]~[CH3]"),
-        94: Chem.MolFromSmarts("[!#6!#1]~[#7]"),
-        95: Chem.MolFromSmarts("[#7]~*~*~[#8]"),
-        96: Chem.MolFromSmarts("*1~*~*~*~*~1"),
-        97: Chem.MolFromSmarts("[#7]~*~*~*~[#8]"),
-        98: Chem.MolFromSmarts("[!#6!#1]1~*~*~*~*~*~1"),
-        99: Chem.MolFromSmarts("[#6]=[#6]"),
-        100: Chem.MolFromSmarts("*~[CH2]~[#7]"),
-        101: Chem.MolFromSmarts(
-            "[$([R]1@[R]@[R]@[R]@[R]@[R]@[R]@[R]@1),$([R]1@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@1),$([R]1@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@1),$([R]1@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@1),$([R]1@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@1),$([R]1@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@1),$([R]1@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@[R]@1)]"),
-        102: Chem.MolFromSmarts("[!#6!#1]~[#8]"),
-        104: Chem.MolFromSmarts("[!#6!#1!H0]~*~[CH2]~*"),
-        105: Chem.MolFromSmarts("*@*(@*)@*"),
-        106: Chem.MolFromSmarts("[!#6!#1]~*(~[!#6!#1])~[!#6!#1]"),
-        107: Chem.MolFromSmarts("[F,Cl,Br,I]~*(~*)~*"),
-        108: Chem.MolFromSmarts("[CH3]~*~*~*~[CH2]~*"),
-        109: Chem.MolFromSmarts("*~[CH2]~[#8]"),
-        110: Chem.MolFromSmarts("[#7]~[#6]~[#8]"),
-        111: Chem.MolFromSmarts("[#7]~*~[CH2]~*"),
-        112: Chem.MolFromSmarts("*~*(~*)(~*)~*"),
-        113: Chem.MolFromSmarts("[#8]!:*:*"),
-        114: Chem.MolFromSmarts("[CH3]~[CH2]~*"),
-        115: Chem.MolFromSmarts("[CH3]~*~[CH2]~*"),
-        116: Chem.MolFromSmarts("[$([CH3]~*~*~[CH2]~*),$([CH3]~*1~*~[CH2]1)]"),
-        117: Chem.MolFromSmarts("[#7]~*~[#8]"),
-        118: Chem.MolFromSmarts("[$(*~[CH2]~[CH2]~*),$(*1~[CH2]~[CH2]1)]"),
-        119: Chem.MolFromSmarts("[#7]=*"),
-        120: Chem.MolFromSmarts("[!#6R]"),
-        121: Chem.MolFromSmarts("[#7R]"),
-        122: Chem.MolFromSmarts("*~[#7](~*)~*"),
-        123: Chem.MolFromSmarts("[#8]~[#6]~[#8]"),
-        124: Chem.MolFromSmarts("[!#6!#1]~[!#6!#1]"),
-        126: Chem.MolFromSmarts("*!@[#8]!@*"),
-        128: Chem.MolFromSmarts(
-            "[$(*~[CH2]~*~*~*~[CH2]~*),$([R]1@[CH2R]@[R]@[R]@[R]@[CH2R]1),$(*~[CH2]~[R]1@[R]@[R]@[CH2R]1),$(*~[CH2]~*~[R]1@[R]@[CH2R]1)]"),
-        129: Chem.MolFromSmarts("[$(*~[CH2]~*~*~[CH2]~*),$([R]1@[CH2]@[R]@[R]@[CH2R]1),$(*~[CH2]~[R]1@[R]@[CH2R]1)]"),
-        131: Chem.MolFromSmarts("[!#6!#1!H0]"),
-        132: Chem.MolFromSmarts("[#8]~*~[CH2]~*"),
-        133: Chem.MolFromSmarts("*@*!@[#7]"),
-        135: Chem.MolFromSmarts("[#7]!:*:*"),
-        136: Chem.MolFromSmarts("[#8]=*"),
-        137: Chem.MolFromSmarts("[!C!cR]"),
-        139: Chem.MolFromSmarts("[O!H0]"),
-        140: Chem.MolFromSmarts("[#8]"),
-        141: Chem.MolFromSmarts("[CH3]"),
-        143: Chem.MolFromSmarts("*@*!@[#8]"),
-        144: Chem.MolFromSmarts("*!:*:*!:*"),
-        147: Chem.MolFromSmarts("[$(*~[CH2]~[CH2]~*),$([R]1@[CH2R]@[CH2R]1)]"),
-        148: Chem.MolFromSmarts("*~[!#6!#1](~*)~*"),
-        150: Chem.MolFromSmarts("*!@*@*!@*"),
-        151: Chem.MolFromSmarts("[#7!H0]"),
-        152: Chem.MolFromSmarts("[#8]~[#6](~[#6])~[#6]"),
-        154: Chem.MolFromSmarts("[#6]=[#8]"),
-        153: Chem.MolFromSmarts("[!#6!#1]~[CH2]~*"),
-        155: Chem.MolFromSmarts("*!@[CH2]!@*"),
-        156: Chem.MolFromSmarts("[#7]~*(~*)~*"),
-        157: Chem.MolFromSmarts("[#6]-[#8]"),
-        158: Chem.MolFromSmarts("[#6]-[#7]"),
-        160: Chem.MolFromSmarts("[C;H3,H4]"),
-        161: Chem.MolFromSmarts("[#7]"),
-        162: Chem.MolFromSmarts("a"),
-        163: Chem.MolFromSmarts("*1~*~*~*~*~*~1"),
-        164: Chem.MolFromSmarts("[#8]"),
-        165: Chem.MolFromSmarts("[R]")
-    }
+def _smarts_substr() -> Dict[int, Mol]:
+    with open(Path(PurePosixPath(__file__)).parent / "resources/maccs_smarts_substr.json") as file:
+        data = json.load(file)
 
+    return {int(k): Chem.MolFromSmarts(smile) for k, smile in data.items()}
+
+
+class MACCSFeaturizer():
     SMARTS_ATOMIC_NUMBER = {
         2: [104],  # atomic num >103 Not complete, RDKit only accepts up to #104
         3: [32, 33, 34, 50, 51, 52, 82, 83, 84],  # Group IVa,Va,VIa Rows 4-6
@@ -346,6 +214,8 @@ class MACCSFeaturizer():
         134: [9, 17, 35, 53]  # Halogen: F,Cl,Br,I
     }
 
+    SMARTS_SUBSTR = _smarts_substr()
+
     def __init__(self):
         super(MACCSFeaturizer).__init__()
 
@@ -364,7 +234,7 @@ class MACCSFeaturizer():
                 _maccs = MACCSkeys.GenMACCSKeys(mol)
                 maccs.append(np.array(_maccs))
 
-        return np.stack(maccs), mols
+        return np.stack([m for m in maccs if not None]), mols
 
     def __call__(self, smiles: List[str]) -> np.ndarray:
         return self._maccs(smiles)[0]
@@ -612,3 +482,152 @@ class MACCSFeaturizer():
             atomic_attribution += weights_submol
 
         return atomic_attribution
+
+
+def _all_patterns():
+    """based/adapted on the implementation by J. Schimunek"""
+
+    with open(Path(PurePosixPath(__file__)).parent / "resources/tox_smarts.json") as file:
+        smarts_list = [s[1] for s in json.load(file)]
+
+    # Code does not work for this case
+    assert len([s for s in smarts_list if ("AND" in s) and ("OR" in s)]) == 0
+
+    # Chem.MolFromSmarts takes a long time so it pays of to parse all the smarts first
+    # and then use them for all molecules. This gives a huge speedup over existing code.
+    # a list of patterns, whether to negate the match result and how to join them to obtain one boolean value
+
+    all_patterns = []
+    for smarts in smarts_list:
+        patterns = []  # list of smarts-patterns
+        # value for each of the patterns above. Negates the values of the above later.
+        negations = []
+
+        if " AND " in smarts:
+            smarts = smarts.split(" AND ")
+            merge_any = False  # If an " AND " is found all "subsmarts" have to match
+        else:
+            # If there is an " OR " present it"s enough is any of the "subsmarts" match.
+            # This also accumulates smarts where neither " OR " nor " AND " occur
+            smarts = smarts.split(" OR ")
+            merge_any = True
+
+        # for all subsmarts check if they are preceded by "NOT "
+        for s in smarts:
+            neg = s.startswith("NOT ")
+            if neg:
+                s = s[4:]
+            patterns.append(Chem.MolFromSmarts(s))
+            negations.append(neg)
+
+        all_patterns.append((patterns, negations, merge_any))
+
+    return all_patterns
+
+
+class ToxFeaturizer():
+    ALL_PATTERNS = _all_patterns()
+
+    def __init__(self):
+        super(ToxFeaturizer, self).__init__()
+
+    def _tox(self, smile_or_mol: Union[str, Mol]) -> np.ndarray:
+        """
+        based/adapted on the implementation by J. Schimunek
+
+        Matches the tox patterns against a molecule. Returns a boolean array
+        """
+
+        mol = Chem.MolFromSmiles(smile_or_mol) if isinstance(smile_or_mol, str) else smile_or_mol
+
+        mol_features = []
+        for patts, negations, merge_any in ToxFeaturizer.ALL_PATTERNS:
+            matches = [mol.HasSubstructMatch(p) for p in patts]
+            matches = [m != n for m, n in zip(matches, negations)]
+            if merge_any:
+                pres = any(matches)
+            else:
+                pres = all(matches)
+            mol_features.append(pres)
+
+        return np.array(mol_features)
+
+    def _toxs(self, smiles: List[str]) -> Tuple[np.ndarray, List[Mol]]:
+
+        toxs, mols = [], []
+        for i, smile in enumerate(smiles):
+            mol = Chem.MolFromSmiles(smile)
+            mols.append(mol)
+
+            if mol is None:
+                warnings.warn(f"could not parse smile {i}: {smile}")
+
+                toxs.append(None)
+            else:
+                _tox = self._tox(mol)
+                toxs.append(_tox)
+
+        return np.stack([t for t in toxs if not None]), mols
+
+    def __call__(self, smiles: List[str]) -> np.ndarray:
+        """returns a binary numpy array"""
+
+        return self._toxs(smiles)[0]
+
+    def _atomic_attribution(self, mol: Mol, feature_attribution: np.ndarray, num_atoms: Optional[int] = None) -> np.ndarray:
+        """adapted/based on the implementation by J. Schimunek"""
+
+        num_atoms = mol.GetNumAtoms() if not num_atoms else num_atoms
+
+        atomic_attribution = np.zeros(num_atoms)
+
+        tox_idx = 0
+
+        for patts, negations, merge_any in ToxFeaturizer.ALL_PATTERNS:
+            attribution_value = feature_attribution[tox_idx]
+            attribution_submol = np.zeros(num_atoms)
+            count_atoms = 0
+            for atom_idx in range(num_atoms):
+                for i in range(len(negations)):
+                    neg = negations[i]
+                    pattern = patts[i]
+
+                    substructures = mol.GetSubstructMatches(pattern)
+                    for structure in substructures:
+                        atom_in_sub = list()
+
+                        if str(neg) == "False":
+                            if atom_idx in structure:
+                                atom_in_sub.append("y")
+                        elif str(neg) == "True":
+                            if atom_idx not in structure:
+                                atom_in_sub.append("y")
+
+                        if "y" in str(atom_in_sub):
+                            attribution_submol[atom_idx] += attribution_value
+                            count_atoms += 1
+
+            if count_atoms != 0:
+                attribution_submol = attribution_submol / count_atoms
+                atomic_attribution += attribution_submol
+
+            tox_idx += 1
+
+        return atomic_attribution
+
+    def atomic_attributions(self, smiles: List[str], feature_attributions: np.ndarray) -> List[np.ndarray]:
+        assert len(smiles) == len(
+            feature_attributions), f"provided number of smiles {len(smiles)} does not match number of features {len(feature_attributions)}"
+
+        _, mols = self._toxs(smiles)
+
+        atomic_attributions = []
+        for i, (smile, mol) in enumerate(zip(smiles, mols)):
+            if mol is None:
+                raise ValueError(f"could not process smile/molecule {i}: {smile}")
+
+            atomic_attribution = self._atomic_attribution(mol, feature_attributions[i])
+
+            atomic_attributions.append(atomic_attribution)
+
+        return atomic_attributions

@@ -115,7 +115,6 @@ class TestMACCSFeaturizer():
         """basic maccs featurizer tests"""
 
         from datasets.featurizer import MACCSFeaturizer
-        import numpy as np
 
         featurizer = MACCSFeaturizer()
         desc = featurizer(sample_smiles)
@@ -136,3 +135,31 @@ class TestMACCSFeaturizer():
         atomic_attribution = featurizer.atomic_attributions(sample_smiles, dummy_attribution)
 
         assert len(sample_smiles) == len(atomic_attribution)
+
+
+class TestToxFeaturizer:
+
+    def test_featurizer(self, sample_smiles):
+        from datasets.featurizer import ToxFeaturizer
+
+        featurizer = ToxFeaturizer()
+        features = featurizer(sample_smiles)
+
+        assert len(sample_smiles) == len(features)
+
+    def test_atomic_attribution(self, sample_smiles):
+        """basic maccs featurizer tests"""
+
+        from datasets.featurizer import ToxFeaturizer
+        import numpy as np
+
+        featurizer = ToxFeaturizer()
+        features = featurizer(sample_smiles)
+
+        dummy_attribution = np.random.binomial(1, 0.3, size=features.shape) * np.random.random(features.shape)
+
+        atomic_attribution = featurizer.atomic_attributions(sample_smiles, dummy_attribution)
+
+        assert len(sample_smiles) == len(atomic_attribution)
+
+
