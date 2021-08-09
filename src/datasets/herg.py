@@ -1,33 +1,33 @@
 from argparse import Namespace
 from pathlib import Path, PurePosixPath
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple
 
-import deepchem
 import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
 import torch
-from deepchem.feat import RDKitDescriptors
 from pytorch_lightning.loggers import LightningLoggerBase
 from pytorch_lightning.utilities import rank_zero_only
-from rdkit.Chem import AllChem
 from scipy.sparse import csr_matrix, save_npz, load_npz
 from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
-from tqdm import tqdm
 
-from datasets.featurizer import ECFC_featurizer
+from datasets.featurizer import ECFPFeaturizer, MACCSFeaturizer, ToxFeaturizer
 
 
 class HERGClassifierDataset(pl.LightningDataModule):
-    DATA_PATH = "../../data/herg/"
+    DATA_PATH = Path(PurePosixPath(__file__)).parent.parent.parent / "data/herg/data_filtered.tsv"
 
     def __init__(self,
                  batch_size: int,
                  num_workers: int = 4,
                  cache_dir=str(Path.home()) + "/.cache/herg/",
                  use_cache: bool = True,
-                 featurizer_name: str = "ecfp",
+                 use_labels: List[str] = None,
+                 split_type: str = "random",
+                 split_size: Tuple[float, float, float] = (0.6, 0.2, 0.2),
+                 split_seed: int = 5180,
+                 featurizer_name: str = "combined",
                  featurizer_kwargs: Optional[dict] = None,
                  **kwargs):
         """
@@ -37,145 +37,87 @@ class HERGClassifierDataset(pl.LightningDataModule):
             num_workers: num workers used for data loaders
             cache_dir: cache directory
             use_cache: whether to use cache or not
-            **kwargs: featurizer params - includes n_bits, radius, chirality, features
+            use_labels: which labels to use provide as targets from the herg dataset
+            split_type: random or stratified
+            split_size: size of split as Tuple(train size, val size, test size) - must sum to 1
+            split_seed: seed for splitting
+            featurizer_name: at the moment only combined is used meaning ecfp + maccs + tox will be concatenated.
+            featurizer_kwargs: featurizer kwargs for ecfp featurizer (radius, folding, return counts)
         """
         super(HERGClassifierDataset, self).__init__()
 
+        self.use_labels = use_labels if use_labels else ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80",
+                                                         "active_g100"]
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.cache_dir = cache_dir
         self.use_cache = use_cache
+        self.split_type = split_type
+        self.split_size = split_size
+        self.split_seed = split_seed
         self.featurizer_name = featurizer_name
         self.featurizer_kwargs = featurizer_kwargs
 
+        if featurizer_name == "ecfp":
+            self.featurizer = ECFPFeaturizer(**featurizer_kwargs)
+        elif featurizer_name == "maccs":
+            self.featurizer = MACCSFeaturizer()
+        elif featurizer_name == "tox":
+            self.featurizer = ToxFeaturizer()
+        elif featurizer_name == "combined":
+            self.featurizer = [ECFPFeaturizer(**featurizer_kwargs), MACCSFeaturizer(), ToxFeaturizer()]
+        else:
+            raise ValueError(f"featurizer {featurizer_name} is unknown")
+
         self.kwargs = kwargs
 
-    def _load_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        train_df = pd.read_csv(HERGClassifierDataset.DATA_PATH + "train.tsv", sep="\t", dtype=str)
-        validation_df = pd.read_csv(HERGClassifierDataset.DATA_PATH + "validation.tsv", sep="\t", dtype=str)
-        test_df = pd.read_csv(HERGClassifierDataset.DATA_PATH + "test.tsv", sep="\t", dtype=str)
-
-        return train_df, validation_df, test_df
-
     def prepare_data(self):
-        """create and cache descriptors using morgan fingerprint vectors if not already done/existing"""
+        """create and cache descriptors using defined featurizer if not already done/existing"""
 
-        if self.featurizer_name == "ecfp":
-            n_bits = self.featurizer_kwargs["n_bits"]
-            radius = self.featurizer_kwargs["radius"]
-            chirality = self.featurizer_kwargs["chirality"] if "chirality" in self.featurizer_kwargs else False
-            features = self.featurizer_kwargs["features"] if "features" in self.featurizer_kwargs else False
-
-            cached_descriptors = self.cache_dir + "herg" + "_ecfp" + f"_radius{str(radius)}" + f"_n_bits{str(n_bits)}" + f"_chirality{str(chirality)}" + f"_features{str(features)}" + ".npz"
+        if self.featurizer_name == "combined":
+            featurizer_kwargs = "_".join([k + "-" + str(v) for k, v in self.featurizer_kwargs.items()])
+            cached_descriptors = self.cache_dir + "herg" + "_combined" + "_" + featurizer_kwargs + ".npz"
 
             if Path(PurePosixPath(cached_descriptors)).exists() and self.use_cache:
                 return
 
-            desc_mat = np.zeros((len(all_dataset[0].X), n_bits))
-
-            pbar = tqdm(all_dataset[0].X)
-            for i, mol in enumerate(pbar):
-                fps = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius, nBits=n_bits, useChirality=chirality, useFeatures=features)
-                desc_mat[i] = fps
+            data = pd.read_csv(HERGClassifierDataset.DATA_PATH, sep="\t")
 
             # create cache dir if not existing
             Path(PurePosixPath(cached_descriptors)).parent.mkdir(parents=True, exist_ok=True)
 
-            sparse_desc_mat = csr_matrix(desc_mat)
-            save_npz(cached_descriptors, sparse_desc_mat)
-        elif self.featurizer_name == "ecfc":
-            radius = self.kwargs["radius"]
-            chirality = self.kwargs["chirality"] if "chirality" in self.kwargs else False
-            features = self.kwargs["features"] if "features" in self.kwargs else False
+            desc_mat = []
+            for featurizer in self.featurizer:
+                desc_mat.append(featurizer(data["smiles"].tolist()).astype(np.uint8))
 
+            desc_mat = np.hstack(desc_mat)
 
-
-            cached_descriptors = self.cache_dir + "herg" + "_ecfc" + f"_radius{str(radius)}" + f"_seed{str(self.split_seed)}" + f"_chirality{str(chirality)}" + f"_features{str(features)}" + ".npz"
-            if Path(PurePosixPath(cached_descriptors)).exists() and self.use_cache:
-                return
-
-            X = all_dataset[0].ids
-            y = all_dataset[0].y
-
-            (X_train, y_train), *_ = self.split(X, y)
-            self.featurizer = ECFC_featurizer(radius=radius, useChirality=chirality, useFeatures=features)
-            self.featurizer.fit(X_train)
-
-            desc_mat = self.featurizer.transform(X)
-
-            Path(PurePosixPath(cached_descriptors)).parent.mkdir(parents=True, exist_ok=True)
-            sparse_desc_mat = csr_matrix(desc_mat)
-            save_npz(cached_descriptors, sparse_desc_mat)
-        elif self.featurizer_name == "rdkit":
-            tasks, all_dataset, transformers = dataset_loading_functions["herg"](featurizer="Raw", splitter=None,
-                                                                                    data_dir=self.cache_dir,
-                                                                                    reload=self.use_cache)
-
-            cached_descriptors = self.cache_dir + "herg" + "_rdkit" + ".npz"
-            if Path(PurePosixPath(cached_descriptors)).exists() and self.use_cache:
-                return
-
-            d = RDKitDescriptors()
-            desc_mat = d.featurize(all_dataset[0].X)
-
-            Path(PurePosixPath(cached_descriptors)).parent.mkdir(parents=True, exist_ok=True)
             sparse_desc_mat = csr_matrix(desc_mat)
             save_npz(cached_descriptors, sparse_desc_mat)
         else:
             raise ValueError(f"unknown featurizer {self.featurizer_name}")
 
     def setup(self, stage: Optional[str] = None):
-        n_bits = self.kwargs["n_bits"]
-        radius = self.kwargs["radius"]
-        chirality = self.kwargs["chirality"] if "chirality" in self.kwargs else False
-        features = self.kwargs["features"] if "features" in self.kwargs else False
+        if self.featurizer_name == "combined":
+            featurizer_kwargs = "_".join([k + "-" + str(v) for k, v in self.featurizer_kwargs.items()])
+            cached_descriptors = self.cache_dir + "herg" + "_combined" + "_" + featurizer_kwargs + ".npz"
 
-        tasks, all_dataset, transformers = dataset_loading_functions["herg"](featurizer="Raw", splitter=None, data_dir=self.cache_dir,
-                                                                                reload=self.use_cache)
-
-        # load descriptors
-        if self.featurizer_name == "ecfp":
-            cached_descriptors = self.cache_dir + "herg" + "_ecfp" + f"_radius{str(radius)}" + f"_n_bits{str(n_bits)}" + f"_chirality{str(chirality)}" + f"_features{str(features)}" + ".npz"
-        elif self.featurizer_name == "ecfc":
-            cached_descriptors = self.cache_dir + "herg" + "_ecfc" + f"_radius{str(radius)}" + f"_seed{str(self.split_seed)}" + f"_chirality{str(chirality)}" + f"_features{str(features)}" + ".npz"
-        elif self.featurizer_name == "rdkit":
-            cached_descriptors = self.cache_dir + "herg" + "_rdkit" + ".npz"
         else:
             raise ValueError(f"unknown featurizer {self.featurizer_name}")
 
         sparse_desc_mat = load_npz(cached_descriptors)
-
         X = sparse_desc_mat.toarray()
-        y = all_dataset[0].y
 
-        # filter nan samples
+        data = pd.read_csv(HERGClassifierDataset.DATA_PATH, sep="\t")
+
+        y = data[self.use_labels].fillna(-1).to_numpy().astype(np.int16)
+
+        # filter nan samples (should not be the case)
         indices = np.all(~np.isnan(X), axis=1)
         X = X[indices, ...]
         y = y[indices]
 
-        if self.noise:
-            X = add_noise(X, type=self.noise, seed=self.split_seed)
-
-        # add random features/noise
-        if self.noise_features:
-            X, _ = add_noise_features(X,
-                                      factor=self.noise_features["factor"],
-                                      type=self.noise_features["type"],
-                                      position=self.noise_features["position"],
-                                      seed=self.split_seed)
-
         self.input_size = X.shape[-1]
-
-        # automatically determine categorical variables
-        X_int = X.astype(int)
-        mask = np.all((X - X_int) == 0, axis=0)
-
-        categorical_sizes = np.max(X, axis=0) + 1
-        self.categorical_sizes = categorical_sizes[mask].astype(int).tolist()
-        self.categorical_indices = np.argwhere(mask == True).flatten().tolist()
-
-        w = all_dataset[0].w if hasattr(all_dataset[0], "w") else None
-        self.classes, self.class_weights = self.determine_classes(y, w)
 
         # default split and create dataset
         (X_train, y_train), (X_val, y_val), (X_test, y_test) = self.split(X, y)
@@ -187,19 +129,6 @@ class HERGClassifierDataset(pl.LightningDataModule):
         self.train_dataset = TensorDataset(torch.from_numpy(X_train).float(), torch.from_numpy(y_train).long().squeeze())
         self.val_dataset = TensorDataset(torch.from_numpy(X_val).float(), torch.from_numpy(y_val).long().squeeze())
         self.test_dataset = TensorDataset(torch.from_numpy(X_test).float(), torch.from_numpy(y_test).long().squeeze())
-
-    def determine_classes(self, y, w):
-        # get classes/weights without sorting
-        indices = np.unique(y, return_index=True)[1]
-        classes = np.concatenate([y[i] for i in sorted(indices)])
-        class_weights = np.concatenate([w[i] for i in sorted(indices)]) if w is not None else None
-
-        # sort classes/weights
-        sorted_indices = np.argsort(classes)
-        classes = classes[sorted_indices]
-        class_weights = class_weights[sorted_indices].tolist() if class_weights is not None else None
-
-        return classes, class_weights
 
     def split(self, X, y):
         test_size = sum(self.split_size[1:])
@@ -241,15 +170,3 @@ class HERGClassifierDataset(pl.LightningDataModule):
         params = Namespace(**params)
 
         logger.log_hyperparams(params)
-
-
-if __name__ == "__main__":
-    dm = MolNetClassifierDataModule(
-        name="bbbp",
-        batch_size=128,
-        split_seed=0,
-        featurizer_name="rdkit",
-    )
-
-    dm.prepare_data()
-    dm.setup()
