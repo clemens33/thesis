@@ -7,6 +7,7 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, Mol, MACCSkeys
 from sklearn.feature_extraction import DictVectorizer
+from tqdm import tqdm
 
 
 class ECFC_featurizer():
@@ -52,12 +53,15 @@ class ECFPFeaturizer():
                  fold: Optional[int] = None,
                  use_chirality: bool = True,
                  use_features: bool = True,
-                 return_count: bool = True):
+                 return_count: bool = True,
+                 map_dict: Optional[dict] = None
+                 ):
+
         self.radius = radius
         self.fold = fold
         self.use_chirality = use_chirality
         self.use_features = use_features
-        self.map_dict = None
+        self.map_dict = map_dict
         self.return_count = return_count
 
     @property
@@ -70,7 +74,7 @@ class ECFPFeaturizer():
     def _ecfp(self, smiles: List[str]) -> Tuple[List[dict], List[dict], List[Mol]]:
         fingerprints, bit_infos, mols = [], [], []
 
-        for idx, smile in enumerate(smiles):
+        for idx, smile in enumerate(tqdm(smiles, desc="_ecfp")):
             mol = Chem.MolFromSmiles(smile)
             mols.append(mol)
 
@@ -219,10 +223,14 @@ class MACCSFeaturizer():
     def __init__(self):
         super(MACCSFeaturizer).__init__()
 
+    @property
+    def n_features(self) -> int:
+        return 167
+
     def _maccs(self, smiles: List[str]) -> Tuple[np.ndarray, List[Mol]]:
         maccs, mols = [], []
 
-        for i, smile in enumerate(smiles):
+        for i, smile in enumerate(tqdm(smiles, desc="_maccs")):
             mol = Chem.MolFromSmiles(smile)
             mols.append(mol)
 
@@ -531,6 +539,10 @@ class ToxFeaturizer():
     def __init__(self):
         super(ToxFeaturizer, self).__init__()
 
+    @property
+    def n_features(self) -> int:
+        return 826
+
     def _tox(self, smile_or_mol: Union[str, Mol]) -> np.ndarray:
         """
         based/adapted on the implementation by J. Schimunek
@@ -555,7 +567,7 @@ class ToxFeaturizer():
     def _toxs(self, smiles: List[str]) -> Tuple[np.ndarray, List[Mol]]:
 
         toxs, mols = [], []
-        for i, smile in enumerate(smiles):
+        for i, smile in enumerate(tqdm(smiles, desc="_toxs")):
             mol = Chem.MolFromSmiles(smile)
             mols.append(mol)
 
