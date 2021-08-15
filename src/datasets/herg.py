@@ -15,7 +15,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from datasets.featurizer import ECFPFeaturizer, MACCSFeaturizer, ToxFeaturizer
 
 
-class HERGClassifierDataset(pl.LightningDataModule):
+class HERGClassifierDataModule(pl.LightningDataModule):
     DATA_PATH = Path(PurePosixPath(__file__)).parent.parent.parent / "data/herg/data_filtered.tsv"
 
     def __init__(self,
@@ -44,7 +44,7 @@ class HERGClassifierDataset(pl.LightningDataModule):
             featurizer_name: at the moment only combined is used meaning ecfp + maccs + tox will be concatenated.
             featurizer_kwargs: featurizer kwargs for ecfp featurizer (radius, folding, return counts)
         """
-        super(HERGClassifierDataset, self).__init__()
+        super(HERGClassifierDataModule, self).__init__()
 
         self.use_labels = use_labels if use_labels else ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80",
                                                          "active_g100"]
@@ -58,13 +58,7 @@ class HERGClassifierDataset(pl.LightningDataModule):
         self.featurizer_name = featurizer_name
         self.featurizer_kwargs = featurizer_kwargs
 
-        if featurizer_name == "ecfp":
-            self.featurizer = ECFPFeaturizer(**featurizer_kwargs)
-        elif featurizer_name == "maccs":
-            self.featurizer = MACCSFeaturizer()
-        elif featurizer_name == "tox":
-            self.featurizer = ToxFeaturizer()
-        elif featurizer_name == "combined":
+        if featurizer_name == "combined":
             self.featurizer = [ECFPFeaturizer(**featurizer_kwargs), MACCSFeaturizer(), ToxFeaturizer()]
         else:
             raise ValueError(f"featurizer {featurizer_name} is unknown")
@@ -81,7 +75,7 @@ class HERGClassifierDataset(pl.LightningDataModule):
             if Path(PurePosixPath(cached_descriptors)).exists() and self.use_cache:
                 return
 
-            data = pd.read_csv(HERGClassifierDataset.DATA_PATH, sep="\t")
+            data = pd.read_csv(HERGClassifierDataModule.DATA_PATH, sep="\t")
 
             # create cache dir if not existing
             Path(PurePosixPath(cached_descriptors)).parent.mkdir(parents=True, exist_ok=True)
@@ -108,7 +102,7 @@ class HERGClassifierDataset(pl.LightningDataModule):
         sparse_desc_mat = load_npz(cached_descriptors)
         X = sparse_desc_mat.toarray()
 
-        data = pd.read_csv(HERGClassifierDataset.DATA_PATH, sep="\t")
+        data = pd.read_csv(HERGClassifierDataModule.DATA_PATH, sep="\t")
 
         y = data[self.use_labels].fillna(-1).to_numpy().astype(np.int16)
 

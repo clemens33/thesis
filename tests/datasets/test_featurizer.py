@@ -111,12 +111,16 @@ class TestECFP_Featurizer():
 
 class TestMACCSFeaturizer():
 
-    def test_featurizer(self, sample_smiles):
+    @pytest.mark.parametrize("n_jobs",
+                             [
+                                 (1), (4), (None),
+                             ])
+    def test_featurizer(self, sample_smiles, n_jobs):
         """basic maccs featurizer tests"""
 
         from datasets.featurizer import MACCSFeaturizer
 
-        featurizer = MACCSFeaturizer()
+        featurizer = MACCSFeaturizer(n_jobs) if n_jobs else MACCSFeaturizer()
         desc = featurizer(sample_smiles)
 
         assert len(sample_smiles) == len(desc)
@@ -139,16 +143,21 @@ class TestMACCSFeaturizer():
 
 class TestToxFeaturizer:
 
-    def test_featurizer(self, sample_smiles):
+    @pytest.mark.parametrize("n_jobs",
+                             [
+                                 (1), (4), (None),
+                             ])
+    def test_featurizer(self, sample_smiles, n_jobs):
+        "basic featurizer tests"
         from datasets.featurizer import ToxFeaturizer
 
-        featurizer = ToxFeaturizer()
+        featurizer = ToxFeaturizer(n_jobs) if n_jobs else ToxFeaturizer()
         features = featurizer(sample_smiles)
 
         assert len(sample_smiles) == len(features)
 
     def test_atomic_attribution(self, sample_smiles):
-        """basic maccs featurizer tests"""
+        """basic maccs attribution tests"""
 
         from datasets.featurizer import ToxFeaturizer
         import numpy as np
@@ -161,5 +170,3 @@ class TestToxFeaturizer:
         atomic_attribution = featurizer.atomic_attributions(sample_smiles, dummy_attribution)
 
         assert len(sample_smiles) == len(atomic_attribution)
-
-

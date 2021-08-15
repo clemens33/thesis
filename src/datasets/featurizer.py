@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 import warnings
 from pathlib import PurePosixPath, Path
 from typing import Optional, List, Tuple, Dict, Union
@@ -8,6 +9,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, Mol, MACCSkeys
 from sklearn.feature_extraction import DictVectorizer
 from tqdm import tqdm
+from tqdm.contrib.concurrent import process_map
 
 
 class ECFC_featurizer():
@@ -220,29 +222,44 @@ class MACCSFeaturizer():
 
     SMARTS_SUBSTR = _smarts_substr()
 
-    def __init__(self):
+    def __init__(self, n_jobs: int = multiprocessing.cpu_count()):
         super(MACCSFeaturizer).__init__()
+
+        self.n_jobs = n_jobs
 
     @property
     def n_features(self) -> int:
         return 167
 
+    def _macc(self, molecule: Union[str, Mol, bytes]) -> np.ndarray:
+        if isinstance(molecule, bytes):
+            mol = Mol(molecule)
+        elif isinstance(molecule, Mol):
+            mol = molecule
+        else:
+            mol = Chem.MolFromSmiles(molecule)
+
+        _maccs = MACCSkeys.GenMACCSKeys(mol)
+
+        return np.array(_maccs)
+
     def _maccs(self, smiles: List[str]) -> Tuple[np.ndarray, List[Mol]]:
         maccs, mols = [], []
 
-        for i, smile in enumerate(tqdm(smiles, desc="_maccs")):
+        for i, smile in enumerate(tqdm(smiles, desc="_mol_maccs")):
             mol = Chem.MolFromSmiles(smile)
             mols.append(mol)
 
             if mol is None:
                 warnings.warn(f"could not parse smile {i}: {smile}")
 
-                maccs.append(None)
-            else:
-                _maccs = MACCSkeys.GenMACCSKeys(mol)
-                maccs.append(np.array(_maccs))
+        _mols = [m.ToBinary() for m in mols if m]
+        if self.n_jobs > 1:
+            maccs = process_map(self._macc, _mols, max_workers=self.n_jobs, desc="_maccs")
+        else:
+            maccs = list(map(self._macc, _mols))
 
-        return np.stack([m for m in maccs if not None]), mols
+        return np.stack(maccs), mols
 
     def __call__(self, smiles: List[str]) -> np.ndarray:
         return self._maccs(smiles)[0]
@@ -536,21 +553,28 @@ def _all_patterns():
 class ToxFeaturizer():
     ALL_PATTERNS = _all_patterns()
 
-    def __init__(self):
+    def __init__(self, n_jobs: int = multiprocessing.cpu_count()):
         super(ToxFeaturizer, self).__init__()
+
+        self.n_jobs = n_jobs
 
     @property
     def n_features(self) -> int:
         return 826
 
-    def _tox(self, smile_or_mol: Union[str, Mol]) -> np.ndarray:
+    def _tox(self, molecule: Union[str, Mol, bytes]) -> np.ndarray:
         """
         based/adapted on the implementation by J. Schimunek
 
         Matches the tox patterns against a molecule. Returns a boolean array
         """
 
-        mol = Chem.MolFromSmiles(smile_or_mol) if isinstance(smile_or_mol, str) else smile_or_mol
+        if isinstance(molecule, bytes):
+            mol = Mol(molecule)
+        elif isinstance(molecule, Mol):
+            mol = molecule
+        else:
+            mol = Chem.MolFromSmiles(molecule)
 
         mol_features = []
         for patts, negations, merge_any in ToxFeaturizer.ALL_PATTERNS:
@@ -567,17 +591,18 @@ class ToxFeaturizer():
     def _toxs(self, smiles: List[str]) -> Tuple[np.ndarray, List[Mol]]:
 
         toxs, mols = [], []
-        for i, smile in enumerate(tqdm(smiles, desc="_toxs")):
+        for i, smile in enumerate(tqdm(smiles, desc="_mols_toxs")):
             mol = Chem.MolFromSmiles(smile)
             mols.append(mol)
 
             if mol is None:
                 warnings.warn(f"could not parse smile {i}: {smile}")
 
-                toxs.append(None)
-            else:
-                _tox = self._tox(mol)
-                toxs.append(_tox)
+        _mols = [m.ToBinary() for m in mols if m]
+        if self.n_jobs > 1:
+            toxs = process_map(self._tox, _mols, max_workers=self.n_jobs, desc="_toxs")
+        else:
+            toxs = list(map(self._tox, _mols))
 
         return np.stack([t for t in toxs if not None]), mols
 
