@@ -13,12 +13,82 @@ from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponent
     plot_masks, plot_rankings
 
 
+class ClassificationHead(nn.Module):
+    def __init__(self, input_size: int, num_classes: Union[int, List[int]], class_weights: Optional[List[float]] = None):
+        super().__init__()
+
+        self.input_size = input_size
+
+        if isinstance(num_classes, int):
+            if num_classes == 2:
+                self.objective = "binary"
+            elif num_classes > 2:
+                self.objective = "multi-class"
+            else:
+                ValueError(f"num_classes {num_classes} not supported")
+        elif isinstance(num_classes, list):
+            if all(c == 2 for c in num_classes):
+                self.objective = "binary-multi-target"
+            else:
+                raise AttributeError("multi class (non binary), multi target objective not supported yet")
+        else:
+            raise AttributeError(f"provided num classes type {type(num_classes)} not supported")
+
+        class_weights = torch.Tensor(class_weights) if class_weights is not None else None
+
+        if self.objective == "binary":
+            self.classifier = nn.Linear(in_features=input_size, out_features=1)
+
+            pos_weight = class_weights[1] / class_weights.sum() if class_weights is not None else None
+            self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+        elif self.objective == "multi-class":
+            self.classifier = nn.Linear(in_features=input_size, out_features=num_classes)
+
+            self.loss_fn = nn.CrossEntropyLoss(weight=class_weights)
+
+        elif self.objective == "binary-multi-target":
+            if class_weights:
+                raise ValueError(f"class weights for multi target binary classification not supported yet")
+
+            self.classifier = nn.Linear(in_features=input_size, out_features=len(num_classes))
+
+            self.loss_fn = nn.BCEWithLogitsLoss(reduction="none")
+
+    def forward(self, inputs: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.objective == "binary":
+            logits = self.classifier(inputs)
+
+            logits = logits.squeeze()
+            probs = torch.sigmoid(logits)
+
+            loss = self.loss_fn(logits, labels.float())
+        elif self.objective == "multi-class":
+            logits = self.classifier(inputs)
+
+            probs = torch.softmax(logits, dim=-1)
+
+            loss = self.loss_fn(logits, labels)
+        elif self.objective == "binary-multi-target":
+            logits = self.classifier(inputs)
+
+            probs = torch.sigmoid(logits)
+
+
+
+            loss = self.loss_fn(logits, labels)
+
+
+
+        return logits, probs, loss
+
+
 class TabNetClassifier(pl.LightningModule):
     def __init__(self,
                  input_size: int,
                  feature_size: int,
                  decision_size: int,
-                 num_classes: int,
+                 num_classes: Union[int, List[int]],
                  nr_layers: int = 1,
                  nr_shared_layers: int = 1,
                  nr_steps: int = 1,
@@ -131,18 +201,7 @@ class TabNetClassifier(pl.LightningModule):
                               attentive_type=attentive_type,
                               **kwargs)
 
-        if num_classes == 2:
-            self.classifier = nn.Linear(in_features=decision_size, out_features=1)
-        else:
-            self.classifier = nn.Linear(in_features=decision_size, out_features=num_classes)
-
-        class_weights = torch.Tensor(class_weights) if class_weights is not None else None
-
-        if num_classes == 2:
-            pos_weight = class_weights[1] / class_weights.sum() if class_weights is not None else None
-            self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-        else:
-            self.loss_fn = nn.CrossEntropyLoss(weight=class_weights)
+        self.classifier = ClassificationHead(input_size=decision_size, num_classes=num_classes, class_weights=class_weights)
 
         metrics = MetricCollection([
             Accuracy(),
