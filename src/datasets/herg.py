@@ -1,6 +1,7 @@
+import multiprocessing
 from argparse import Namespace
 from pathlib import Path, PurePosixPath
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ from pytorch_lightning.loggers import LightningLoggerBase
 from pytorch_lightning.utilities import rank_zero_only
 from scipy.sparse import csr_matrix, save_npz, load_npz
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 from torch.utils.data import TensorDataset, DataLoader
 
 from datasets.featurizer import ECFPFeaturizer, MACCSFeaturizer, ToxFeaturizer
@@ -17,10 +19,11 @@ from datasets.featurizer import ECFPFeaturizer, MACCSFeaturizer, ToxFeaturizer
 
 class HERGClassifierDataModule(pl.LightningDataModule):
     DATA_PATH = Path(PurePosixPath(__file__)).parent.parent.parent / "data/herg/data_filtered.tsv"
+    IGNORE_INDEX = -100
 
     def __init__(self,
                  batch_size: int,
-                 num_workers: int = 4,
+                 num_workers: int = multiprocessing.cpu_count() // 2,
                  cache_dir=str(Path.home()) + "/.cache/herg/",
                  use_cache: bool = True,
                  use_labels: List[str] = None,
@@ -29,6 +32,7 @@ class HERGClassifierDataModule(pl.LightningDataModule):
                  split_seed: int = 5180,
                  featurizer_name: str = "combined",
                  featurizer_kwargs: Optional[dict] = None,
+                 standardize: bool = True,
                  **kwargs):
         """
 
@@ -43,6 +47,7 @@ class HERGClassifierDataModule(pl.LightningDataModule):
             split_seed: seed for splitting
             featurizer_name: at the moment only combined is used meaning ecfp + maccs + tox will be concatenated.
             featurizer_kwargs: featurizer kwargs for ecfp featurizer (radius, folding, return counts)
+            standardize: default true - standardize features
         """
         super(HERGClassifierDataModule, self).__init__()
 
@@ -57,9 +62,10 @@ class HERGClassifierDataModule(pl.LightningDataModule):
         self.split_seed = split_seed
         self.featurizer_name = featurizer_name
         self.featurizer_kwargs = featurizer_kwargs
+        self.standardize = standardize
 
         if featurizer_name == "combined":
-            self.featurizer = [ECFPFeaturizer(**featurizer_kwargs), MACCSFeaturizer(), ToxFeaturizer()]
+            self.featurizer = [ECFPFeaturizer(**featurizer_kwargs), MACCSFeaturizer(n_jobs=num_workers), ToxFeaturizer(n_jobs=num_workers)]
         else:
             raise ValueError(f"featurizer {featurizer_name} is unknown")
 
@@ -95,7 +101,6 @@ class HERGClassifierDataModule(pl.LightningDataModule):
         if self.featurizer_name == "combined":
             featurizer_kwargs = "_".join([k + "-" + str(v) for k, v in self.featurizer_kwargs.items()])
             cached_descriptors = self.cache_dir + "herg" + "_combined" + "_" + featurizer_kwargs + ".npz"
-
         else:
             raise ValueError(f"unknown featurizer {self.featurizer_name}")
 
@@ -104,12 +109,18 @@ class HERGClassifierDataModule(pl.LightningDataModule):
 
         data = pd.read_csv(HERGClassifierDataModule.DATA_PATH, sep="\t")
 
-        y = data[self.use_labels].fillna(-1).to_numpy().astype(np.int16)
+        # replace nan values/not defined herg activities with an ignorable index
+        y = data[self.use_labels].fillna(HERGClassifierDataModule.IGNORE_INDEX).to_numpy().astype(np.int16)
 
-        # filter nan samples (should not be the case)
+        # filter samples for which all herg activities are not defined
+        indices = ~np.all((y == HERGClassifierDataModule.IGNORE_INDEX), axis=1)
+        X = X[indices, ...]
+        y = y[indices, ...]
+
+        # filter nan features within samples (should not be the case)
         indices = np.all(~np.isnan(X), axis=1)
         X = X[indices, ...]
-        y = y[indices]
+        y = y[indices, ...]
 
         self.input_size = X.shape[-1]
 
@@ -118,20 +129,38 @@ class HERGClassifierDataModule(pl.LightningDataModule):
 
         X_train = X_train.astype(np.float32)
         X_val = X_val.astype(np.float32)
-        X_test = X_test.astype(np.float32)
+        X_test = X_test.astype(np.float32) if X_test is not None else None
+
+        if self.standardize:
+            scaler = StandardScaler()
+            X_train = scaler.fit_transform(X_train)
+            X_val = scaler.transform(X_val)
+            X_test = scaler.transform(X_test) if X_test is not None else None
 
         self.train_dataset = TensorDataset(torch.from_numpy(X_train).float(), torch.from_numpy(y_train).long().squeeze())
         self.val_dataset = TensorDataset(torch.from_numpy(X_val).float(), torch.from_numpy(y_val).long().squeeze())
-        self.test_dataset = TensorDataset(torch.from_numpy(X_test).float(), torch.from_numpy(y_test).long().squeeze())
+
+        if X_test is not None:
+            self.test_dataset = TensorDataset(torch.from_numpy(X_test).float(), torch.from_numpy(y_test).long().squeeze())
+        else:
+            self.test_dataset = None
+
+    # TODO - calculate class weights
+    def determine_class_weights(self):
+        pass
 
     def split(self, X, y):
-        test_size = sum(self.split_size[1:])
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=test_size, random_state=self.split_seed,
-                                                          stratify=self.classes if self.split_type == "stratified" else None)
+        if self.split_type != "random":
+            raise ValueError(f"split type {self.split_type} not supported yet")
 
-        test_size = self.split_size[-1] / test_size
-        X_val, X_test, y_val, y_test = train_test_split(X_val, y_val, test_size=test_size, random_state=self.split_seed,
-                                                        stratify=self.classes if self.split_type == "stratified" else None)
+        test_size = sum(self.split_size[1:])
+        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=test_size, random_state=self.split_seed)
+
+        if self.split_size[-1] > 0 and len(self.split_size) == 3:
+            test_size = self.split_size[-1] / test_size
+            X_val, X_test, y_val, y_test = train_test_split(X_val, y_val, test_size=test_size, random_state=self.split_seed)
+        else:
+            X_test, y_test = None, None
 
         return (X_train, y_train), (X_val, y_val), (X_test, y_test)
 
@@ -142,10 +171,17 @@ class HERGClassifierDataModule(pl.LightningDataModule):
         return DataLoader(self.val_dataset, batch_size=len(self.val_dataset), num_workers=self.num_workers, pin_memory=True)
 
     def test_dataloader(self):
-        if len(self.test_dataset) > 0:
+        if self.test_dataset is not None:
             return DataLoader(self.test_dataset, batch_size=len(self.test_dataset), num_workers=self.num_workers, pin_memory=True)
         else:
             return None
+
+    @property
+    def num_classes(self) -> Union[int, List[int]]:
+        if len(self.use_labels) > 1:
+            return [2] * len(self.use_labels)
+        else:
+            return 2
 
     @rank_zero_only
     def log_hyperparameters(self, logger: LightningLoggerBase, ignore_param: List[str] = None, types: List = None):
