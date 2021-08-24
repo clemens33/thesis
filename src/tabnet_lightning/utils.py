@@ -321,45 +321,56 @@ def plot_rankings(mask: torch.Tensor,
     return path
 
 
-if __name__ == "__main__":
-    # from datasets import CovTypeDataModule
-    #
-    # size = (100, 55)
-    # nr_samples = 20
-    #
-    # inputs = torch.randint(0, 2, size=size)
-    # labels = torch.randint(0, 8, size=(size[0],))
-    # mask = torch.rand(size)
-    #
-    # masks = [torch.rand(size) for _ in range(4)]
-    #
+def replace_key_name(d: dict, to_replace: str, replace_with: str):
+    return {
+        k.replace(to_replace, replace_with) if isinstance(k, str) else k: v for k, v in d.items()
+    }
 
-    # plot_masks(inputs, mask, masks, feature_names=CovTypeDataModule.ALL_COLUMNS)
-    # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=None, normalize_inputs=False, show=True))
 
-    # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, masks=masks, normalize_inputs=False, show=True))
-    # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, masks=masks, normalize_inputs=True, show=True))
-    #
-    # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, normalize_inputs=False, show=True))
-    # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, normalize_inputs=True, show=True))
 
-    from datasets import CovTypeDataModule
 
-    size = (100, 10)
 
-    mask = torch.randint(0, 10, size=size).float()
-    # feature_names = CovTypeDataModule.ALL_COLUMNS[:10]
 
-    plot_rankings(mask, show=True, plot_std=False, top_k=100)
-
-    feature_names = CovTypeDataModule.ALL_COLUMNS[:5]
-    mask = torch.Tensor([
-        [10, 0, 0, 0, 1],
-        [11, 0, 0, 3, 0],
-        [11, 0, 0, 0, 1],
-        [12, 0, 0, 1, 0],
-        [10, 0, 0, 10, 2],
-    ])
-
-    path = plot_rankings(mask, feature_names=feature_names, show=True, plot_std=True, top_k=100)
-    print(path)
+# TODO - move to pytest
+# if __name__ == "__main__":
+#     # from datasets import CovTypeDataModule
+#     #
+#     # size = (100, 55)
+#     # nr_samples = 20
+#     #
+#     # inputs = torch.randint(0, 2, size=size)
+#     # labels = torch.randint(0, 8, size=(size[0],))
+#     # mask = torch.rand(size)
+#     #
+#     # masks = [torch.rand(size) for _ in range(4)]
+#     #
+#
+#     # plot_masks(inputs, mask, masks, feature_names=CovTypeDataModule.ALL_COLUMNS)
+#     # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=None, normalize_inputs=False, show=True))
+#
+#     # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, masks=masks, normalize_inputs=False, show=True))
+#     # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, masks=masks, normalize_inputs=True, show=True))
+#     #
+#     # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, normalize_inputs=False, show=True))
+#     # print(plot_masks(inputs, nr_samples=nr_samples, aggregated_mask=mask, labels=labels, normalize_inputs=True, show=True))
+#
+#     from datasets import CovTypeDataModule
+#
+#     size = (100, 10)
+#
+#     mask = torch.randint(0, 10, size=size).float()
+#     # feature_names = CovTypeDataModule.ALL_COLUMNS[:10]
+#
+#     plot_rankings(mask, show=True, plot_std=False, top_k=100)
+#
+#     feature_names = CovTypeDataModule.ALL_COLUMNS[:5]
+#     mask = torch.Tensor([
+#         [10, 0, 0, 0, 1],
+#         [11, 0, 0, 3, 0],
+#         [11, 0, 0, 0, 1],
+#         [12, 0, 0, 1, 0],
+#         [10, 0, 0, 10, 2],
+#     ])
+#
+#     path = plot_rankings(mask, feature_names=feature_names, show=True, plot_std=True, top_k=100)
+#     print(path)
