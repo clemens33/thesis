@@ -34,6 +34,15 @@ class CustomAccuracy(Metric):
     """custom binary accuracy implementation - supports multi target binary cases with defined ignore index"""
 
     def __init__(self, num_targets: int = 1, ignore_index: int = -100, threshold: float = .5, return_verbose: bool = False, dist_sync_on_step=False):
+        """
+
+        Args:
+            num_targets (): number of targets
+            ignore_index (): index within targets/lables which will be ignored during metric calculation
+            threshold ():
+            return_verbose (): if true additionally returns individual metric per target
+            dist_sync_on_step ():
+        """
         super().__init__(dist_sync_on_step=dist_sync_on_step, compute_on_step=True)
 
         self.ignore_index = ignore_index
@@ -113,26 +122,21 @@ class CustomAUROC(Metric):
             # add only those predictions which we are not supposed to ignore
             mask = (targets[:, t] != self.ignore_index)
 
-            _preds.append(preds[mask, t])
-            _targets.append(targets[mask, t])
+            _p = preds[mask, t]
+            _t = targets[mask, t]
 
-        self.preds.append(_preds)
-        self.targets.append(_targets)
+            if len(self.preds) < t + 1:
+                self.preds.append(_p)
+                self.targets.append(_t)
+            else:
+                self.preds[t] = torch.cat([self.preds[t], _p])
+                self.targets[t] = torch.cat([self.targets[t], _t])
 
     def compute(self):
         aurocs = torch.zeros(self.num_targets)
         for t in range(self.num_targets):
-            preds, targets = [], []
-            for _preds, _targets in zip(self.preds, self.targets):
-                if _preds[t].numel() > 0 and _targets[t].numel() > 0:
-                    preds.append(_preds[t])
-                    targets.append(_targets[t])
-
             try:
-                preds = torch.cat(preds)
-                targets = torch.cat(targets)
-
-                aurocs[t] = auroc(preds, targets.long())
+                aurocs[t] = auroc(self.preds[t], self.targets[t].long())
             except Exception as e:
                 aurocs[t] = float("nan")
 
@@ -144,5 +148,7 @@ class CustomAUROC(Metric):
             return aurocs[~aurocs.isnan()].mean()
 
     @staticmethod
-    def reduce_fx(state: List[List[List[torch.Tensor]]]):
+    def reduce_fx(state: List[torch.Tensor]):
         raise NotImplementedError("reduce fx not yet implemented")
+
+

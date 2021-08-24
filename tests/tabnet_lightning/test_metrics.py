@@ -63,6 +63,26 @@ class TestCustomAccuracy():
 
 class TestCustomAUROC():
     @pytest.mark.parametrize("preds, targets, ignore_index, chunks", [
+        (torch.Tensor([
+            [0.1, 0.3],
+            [0.2, 0.4],
+            [0.3, 0.6],
+            [0.1, 0.1],
+            [0.3, 0.6],
+            [0.5, 0.1],
+            [0.3, 0.6],
+            [0.5, 0.1],
+        ]), torch.Tensor([
+            [0, 1],
+            [0, 0],
+            [0, -100],
+            [1, 1],
+            [0, -100],
+            [1, 1],
+            [0, -100],
+            [1, 1],
+        ]), -100, 4),
+
         (torch.Tensor([0.1, 0.9]), torch.Tensor([1, 0]), -100, 1),
 
         (torch.Tensor([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]), torch.Tensor([1, 0, 1, 0, 0, 0, 0, 0, 0]), -100, 9),
@@ -109,7 +129,7 @@ class TestCustomAUROC():
             [1, 1],
             [0, -100],
             [1, 1],
-        ]), -100, 1),
+        ]), -100, 4),
 
     ])
     def test_auroc(self, preds, targets, ignore_index, chunks):
@@ -153,9 +173,6 @@ class TestCustomAUROC():
                 assert torch.allclose(torch.tensor(expected_auroc).float(), aurocs[t])
 
         assert torch.allclose(expected_aurocs[~expected_aurocs.isnan()].mean(), auroc_mean)
-
-
-
 
 # TODO add tests for sparsity metrics
 #
