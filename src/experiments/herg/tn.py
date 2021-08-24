@@ -1,5 +1,6 @@
 import os
 import sys
+import traceback
 from argparse import Namespace, ArgumentParser
 from typing import Dict, Tuple
 
@@ -9,11 +10,10 @@ from pytorch_lightning.callbacks import LearningRateMonitor, EarlyStopping, Mode
 from pytorch_lightning.loggers import MLFlowLogger
 
 from datasets import HERGClassifierDataModule
-from experiments.models.index_emb_classifier import IndexEmbTabNetClassifier
 from tabnet_lightning import TabNetClassifier, TabNetTrainer
 
 
-def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassifier, TabNetTrainer, MolNetClassifierDataModule]:
+def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassifier, TabNetTrainer, HERGClassifierDataModule]:
     mlf_logger = MLFlowLogger(
         experiment_name=args.experiment_name,
         tracking_uri=args.tracking_uri,
@@ -29,12 +29,7 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
         cache_dir=args.cache_dir,
         use_cache=True,
         featurizer_name=args.featurizer_name,
-        featurizer_kwargs={
-            "radius": args.radius,
-            "fold": args.n_bits if hasattr(args, "n_bits") else None,
-            "chirality": args.chirality,
-            "features": args.features,
-        }
+        featurizer_kwargs=args.featurizer_kwargs
     )
     dm.prepare_data()
     dm.setup()
@@ -48,8 +43,8 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
 
     classifier = TabNetClassifier(
         input_size=dm.input_size,
-        num_classes=len(dm.classes),
-        class_weights=dm.class_weights,
+        num_classes=dm.num_classes,
+        ignore_index=HERGClassifierDataModule.IGNORE_INDEX,
 
         **vars(args),
     )
@@ -59,13 +54,13 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
 
     callbacks = [
         ModelCheckpoint(
-            monitor="val/AUROC",
-            mode="max",
+            monitor="val/loss",
+            mode="min",
         ),
         EarlyStopping(
-            monitor="val/AUROC",
+            monitor="val/loss",
             patience=args.patience,
-            mode="max"
+            mode="min"
         ),
         LearningRateMonitor(logging_interval="step"),
     ]
@@ -95,6 +90,9 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
     except Exception as e:
         print(f"exception raised during training: {e}")
 
+        print(traceback.format_exc())
+        print(sys.exc_info())
+
     # gets the best validation metrics
     r = trainer.test(test_dataloaders=dm.val_dataloader())
     results_val_best = {}
@@ -116,44 +114,42 @@ def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
 
     # trainer/logging args
-    args.experiment_name = "herg_tn1"
+    args.experiment_name = "herg_tn2"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
-    args.max_steps = 200
+    args.max_steps = 1000
     args.seed = 0
     args.patience = 100
 
     # data module args
-    args.data_name = "bbbp"
-    args.batch_size = 256
+    args.batch_size = 512
     args.split_seed = 0
-    args.n_bits = 1024
-    args.radius = 4
-    args.chirality = True
-    args.features = True
-    # args.noise_features = {
-    #     "type": "zeros",
-    #     "factor": 1.0,
-    #     "position": "random",
-    # }
-    # args.noise = "zeros_standard_normal2"
-    args.featurizer_name = "ecfp"
+
+    args.featurizer_name = "combined"
+    args.featurizer_kwargs = {
+        "fold": 1024,
+        "radius": 3,
+        "return_count": True,
+        "use_chirality": True,
+        "use_features": True,
+    }
 
     args.num_workers = 4
-    args.cache_dir = "../../../" + "data/molnet/bbbp/"
+    args.cache_dir = "../../../" + "data/herg/"
 
     # model args
-    args.decision_size = 32
+    args.decision_size = 64
     args.feature_size = args.decision_size * 2
     args.nr_layers = 2
     args.nr_shared_layers = 2
-    args.nr_steps = 8
-    args.gamma = 3.0
+    args.nr_steps = 6
+    args.gamma = 1.5
 
-    # args.relaxation_type = "gamma_trainable"
-    args.alpha = 2.0
-    args.attentive_type = "binary_mask"
-    args.slope = 3.0
-    args.slope_type = "slope_fixed"
+    args.relaxation_type = "gamma_fixed"
+    # args.alpha = 2.0
+    # args.attentive_type = "sparsemax"
+
+    # args.slope = 3.0
+    # args.slope_type = "slope_fixed"
 
     # args.lambda_sparse = 1e-6
     # args.lambda_sparse = 0.1
@@ -161,32 +157,28 @@ def manual_args(args: Namespace) -> Namespace:
 
     # args.virtual_batch_size = 32  # -1 do not use any batch normalization
     args.virtual_batch_size = -1  # -1 do not use any batch normalization
+    #args.virtual_batch_size = 64
+    #args.momentum = 0.1
+
     # args.normalize_input = True
 
     args.normalize_input = False
     # args.virtual_batch_size = 256  # -1 do not use any batch normalization
 
-    args.lr = 0.0013033727164701418
-    args.optimizer = "adam"
+    args.lr = 0.001
+    #args.optimizer = "adam"
     # args.scheduler = "exponential_decay"
     # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
 
-    # args.optimizer="adamw"
-    # args.optimizer_params={"weight_decay": 0.0001}
+    args.optimizer="adamw"
+    args.optimizer_params={"weight_decay": 0.0001}
     args.scheduler = "linear_with_warmup"
     # args.scheduler_params = {"warmup_steps": 10}
     args.scheduler_params = {"warmup_steps": 0.01}
 
-    # args.index_embeddings = True
-    # args.categorical_embeddings = True
-    # args.categorical_indices = list(range(args.n_bits))
-    # args.categorical_size = [2] * args.n_bits
-    # args.embedding_dims = 1
-    # args.embedding_dims = [1] * args.n_bits
-
+    args.log_sparsity = True
     # args.log_sparsity = "verbose"
-    args.log_sparsity = "verbose"
-    args.log_parameters = True
+    # args.log_parameters = False
 
     return args
 
@@ -204,10 +196,6 @@ def run_cli() -> Namespace:
 
 
 if __name__ == "__main__":
-
-
-    os.source_bash_file('/path/to/env/file')
-
     args = run_cli()
 
     results_val, results_test, *_ = train_tn(args)
