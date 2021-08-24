@@ -8,27 +8,35 @@ from torch.optim.lr_scheduler import StepLR
 from torchmetrics import MetricCollection, Accuracy, AUROC
 
 from tabnet import TabNet
-from tabnet_lightning.metrics import Sparsity
+from tabnet_lightning.metrics import Sparsity, CustomAccuracy, CustomAUROC
 from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler, StackedEmbedding, MultiEmbedding, \
-    plot_masks, plot_rankings
+    plot_masks, plot_rankings, replace_key_name
 
 
 class ClassificationHead(nn.Module):
-    def __init__(self, input_size: int, num_classes: Union[int, List[int]], class_weights: Optional[List[float]] = None):
+    def __init__(self, input_size: int, num_classes: Union[int, List[int]], class_weights: Optional[List[float]] = None,
+                 ignore_index: int = -100):
         super().__init__()
 
         self.input_size = input_size
+        self.ignore_index = ignore_index
 
         if isinstance(num_classes, int):
             if num_classes == 2:
                 self.objective = "binary"
+                self.num_classes = 2
+                self.num_targets = 1
             elif num_classes > 2:
                 self.objective = "multi-class"
+                self.num_classes = num_classes
+                self.num_targets = 1
             else:
                 ValueError(f"num_classes {num_classes} not supported")
         elif isinstance(num_classes, list):
             if all(c == 2 for c in num_classes):
                 self.objective = "binary-multi-target"
+                self.num_classes = 2
+                self.num_targets = len(num_classes)
             else:
                 raise AttributeError("multi class (non binary), multi target objective not supported yet")
         else:
@@ -39,46 +47,61 @@ class ClassificationHead(nn.Module):
         if self.objective == "binary":
             self.classifier = nn.Linear(in_features=input_size, out_features=1)
 
-            pos_weight = class_weights[1] / class_weights.sum() if class_weights is not None else None
+            pos_weight = None
+            if class_weights:
+                if len(class_weights) == 2:
+                    pos_weight = class_weights[1] / class_weights.sum()
+                elif len(class_weights) == 1:
+                    pos_weight = class_weights[0]
+                else:
+                    raise AttributeError(f"provided class weights {len(class_weights)} do not match binary classification objective")
+
             self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
         elif self.objective == "multi-class":
             self.classifier = nn.Linear(in_features=input_size, out_features=num_classes)
 
-            self.loss_fn = nn.CrossEntropyLoss(weight=class_weights)
+            self.loss_fn = nn.CrossEntropyLoss(weight=class_weights, ignore_index=ignore_index)
 
         elif self.objective == "binary-multi-target":
             if class_weights:
-                raise ValueError(f"class weights for multi target binary classification not supported yet")
+                if len(class_weights) != len(num_classes):
+                    raise AttributeError(
+                        f"length of provided class weights {len(class_weights)} does not match the provided number of classes {num_classes}")
 
             self.classifier = nn.Linear(in_features=input_size, out_features=len(num_classes))
 
-            self.loss_fn = nn.BCEWithLogitsLoss(reduction="none")
+            self.loss_fn = nn.BCEWithLogitsLoss(reduction="none", pos_weight=class_weights)
 
-    def forward(self, inputs: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, inputs: torch.Tensor, labels: Optional[torch.Tensor] = None) -> Tuple[
+        torch.Tensor, torch.Tensor, Union[None, torch.Tensor]]:
+
+        logits, probs, loss = None, None, None
         if self.objective == "binary":
             logits = self.classifier(inputs)
 
             logits = logits.squeeze()
             probs = torch.sigmoid(logits)
 
-            loss = self.loss_fn(logits, labels.float())
+            loss = self.loss_fn(logits, labels.float()) if labels is not None else None
         elif self.objective == "multi-class":
             logits = self.classifier(inputs)
 
             probs = torch.softmax(logits, dim=-1)
 
-            loss = self.loss_fn(logits, labels)
+            loss = self.loss_fn(logits, labels) if labels is not None else None
         elif self.objective == "binary-multi-target":
             logits = self.classifier(inputs)
-
             probs = torch.sigmoid(logits)
 
+            if labels is not None:
+                mask = torch.where(labels == self.ignore_index, 0, 1)
+                labels = labels * mask
 
+                loss = self.loss_fn(logits, labels.float())
 
-            loss = self.loss_fn(logits, labels)
-
-
+                loss = loss * mask
+                loss = loss.mean()
 
         return logits, probs, loss
 
@@ -92,7 +115,7 @@ class TabNetClassifier(pl.LightningModule):
                  nr_layers: int = 1,
                  nr_shared_layers: int = 1,
                  nr_steps: int = 1,
-                 momentum: float = 0.01,
+                 momentum: float = 0.1,
                  virtual_batch_size: int = 8,
                  normalize_input: bool = True,
                  eps: float = 1e-5,
@@ -103,6 +126,7 @@ class TabNetClassifier(pl.LightningModule):
                  #
                  lambda_sparse: float = 1e-4,
                  #
+                 ignore_index: int = -100,
                  categorical_indices: Optional[List[int]] = None,
                  categorical_size: Optional[List[int]] = None,
                  embedding_dims: Optional[Union[List[int], int]] = None,
@@ -201,13 +225,19 @@ class TabNetClassifier(pl.LightningModule):
                               attentive_type=attentive_type,
                               **kwargs)
 
-        self.classifier = ClassificationHead(input_size=decision_size, num_classes=num_classes, class_weights=class_weights)
+        self.classifier = ClassificationHead(input_size=decision_size, num_classes=num_classes, class_weights=class_weights,
+                                             ignore_index=ignore_index)
 
-        metrics = MetricCollection([
-            Accuracy(),
-            AUROC() if num_classes == 2 else AUROC(num_classes=num_classes),
-            # TODO check -> leads to memory leak (atm fixed by calling reset in epoch end callbacks)
-        ])
+        metrics = MetricCollection(
+            [
+                CustomAccuracy(num_targets=self.classifier.num_targets, ignore_index=ignore_index),
+                CustomAUROC(num_targets=self.classifier.num_targets, ignore_index=ignore_index),
+            ]
+            if self.classifier.objective == "binary-multi-target" else [
+                Accuracy(),
+                AUROC(num_classes=self.classifier.num_classes)
+            ]
+        )
 
         self.train_metrics = metrics.clone(prefix="train/")
         self.val_metrics = metrics.clone(prefix="val/")
@@ -237,37 +267,32 @@ class TabNetClassifier(pl.LightningModule):
                 "test_sparsity_metrics": nn.ModuleList([m.clone() for m in metrics]) if metrics else None,
             })
 
-    def forward(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
+    def forward(self, inputs: torch.Tensor, labels: Optional[torch.Tensor] = None) -> Tuple[
+        torch.Tensor, torch.Tensor, Union[None, torch.Tensor], torch.Tensor, torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
         inputs = self.embeddings(inputs)
 
         decision, mask, entropy, decisions, masks = self.encoder(inputs)
 
-        logits = self.classifier(decision)
+        logits, probs, loss = self.classifier(decision, labels)
 
-        return logits, mask, entropy, decisions, masks
+        return logits, probs, loss, mask, entropy, decisions, masks
 
     def _step(self, inputs: torch.Tensor, labels: torch.Tensor) -> Tuple[
         torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[torch.Tensor]]:
-        logits, mask, entropy, _, masks = self(inputs)
 
-        if self.num_classes == 2:
-            logits = logits.squeeze()
-            probs = torch.sigmoid(logits)
-        else:
-            probs = torch.softmax(logits, dim=-1)
+        logits, probs, loss, mask, entropy, _, masks = self(inputs, labels)
 
-        loss = self.loss_fn(logits, labels.float() if self.num_classes == 2 else labels)
         loss = loss + entropy * self.lambda_sparse
 
         return loss, logits, probs, labels, mask, masks
 
-    def training_step(self, batch, batch_idx) -> torch.Tensor:
+    def training_step(self, batch, batch_idx: int) -> torch.Tensor:
         loss, logits, probs, labels, mask, masks = self._step(*batch)
 
         self.log("train/loss", loss, prog_bar=True)
 
         output = self.train_metrics(probs, labels)
-        self.log_dict(output)
+        self.log_dict(replace_key_name(output, "Custom", ""))
 
         self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="train")
         self._log_parameters()
@@ -287,7 +312,7 @@ class TabNetClassifier(pl.LightningModule):
         output = self.val_metrics(probs, labels)
 
         if self.log_metrics:
-            self.log_dict(output, prog_bar=True)
+            self.log_dict(replace_key_name(output, "Custom", ""), prog_bar=True)
 
         self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="val")
 
@@ -300,7 +325,6 @@ class TabNetClassifier(pl.LightningModule):
             }
 
     def validation_epoch_end(self, outputs: List[Any]):
-
         self.val_metrics.reset()
 
         self._log_sparsity(prefix="val", compute=True)
@@ -313,7 +337,7 @@ class TabNetClassifier(pl.LightningModule):
         output = self.test_metrics(probs, labels)
 
         if self.log_metrics:
-            self.log_dict(output)
+            self.log_dict(replace_key_name(output, "Custom", ""))
 
         self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="test")
 
