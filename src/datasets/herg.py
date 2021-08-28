@@ -86,11 +86,7 @@ class HERGClassifierDataModule(pl.LightningDataModule):
             # create cache dir if not existing
             Path(PurePosixPath(cached_descriptors)).parent.mkdir(parents=True, exist_ok=True)
 
-            desc_mat = []
-            for featurizer in self.featurizer:
-                desc_mat.append(featurizer(data["smiles"].tolist()).astype(np.uint8))
-
-            desc_mat = np.hstack(desc_mat)
+            desc_mat = self.featurize(data["smiles"].tolist())
 
             sparse_desc_mat = csr_matrix(desc_mat)
             save_npz(cached_descriptors, sparse_desc_mat)
@@ -109,6 +105,10 @@ class HERGClassifierDataModule(pl.LightningDataModule):
 
         data = pd.read_csv(HERGClassifierDataModule.DATA_PATH, sep="\t")
 
+        if self.featurizer_name == "combined":
+            # necessary to reinitialize feature map within ecfp featurizer
+            self.featurizer[0].fit_transform(data["smiles"].tolist())
+
         # replace nan values/not defined herg activities with an ignorable index
         y = data[self.use_labels].fillna(HERGClassifierDataModule.IGNORE_INDEX).to_numpy().astype(np.int16)
 
@@ -116,16 +116,19 @@ class HERGClassifierDataModule(pl.LightningDataModule):
         indices = ~np.all((y == HERGClassifierDataModule.IGNORE_INDEX), axis=1)
         X = X[indices, ...]
         y = y[indices, ...]
+        self.data = data.iloc[indices]
 
         # filter nan features within samples (should not be the case)
         indices = np.all(~np.isnan(X), axis=1)
         X = X[indices, ...]
         y = y[indices, ...]
+        self.data = self.data.iloc[indices]
 
         self.input_size = X.shape[-1]
 
         # default split and create dataset
         (X_train, y_train), (X_val, y_val), (X_test, y_test) = self.split(X, y)
+        self.train_indices, self.val_indices, self.test_indices = self.split_indices(len(X))
 
         X_train = X_train.astype(np.float32)
         X_val = X_val.astype(np.float32)
@@ -144,6 +147,17 @@ class HERGClassifierDataModule(pl.LightningDataModule):
             self.test_dataset = TensorDataset(torch.from_numpy(X_test).float(), torch.from_numpy(y_test).long().squeeze())
         else:
             self.test_dataset = None
+
+    def featurize(self, smiles: List[str]) -> np.ndarray:
+        """init featurizer based on provided smiles and returns featurized smiles"""
+
+        desc_mat = []
+        for featurizer in self.featurizer:
+            desc_mat.append(featurizer(smiles).astype(np.uint8))
+
+        desc_mat = np.hstack(desc_mat)
+
+        return desc_mat
 
     # TODO - calculate class weights
     def determine_class_weights(self):
@@ -164,6 +178,23 @@ class HERGClassifierDataModule(pl.LightningDataModule):
 
         return (X_train, y_train), (X_val, y_val), (X_test, y_test)
 
+    def split_indices(self, nr_samples: int) -> Tuple[np.ndarray, np.ndarray, Union[np.ndarray, None]]:
+        if self.split_type != "random":
+            raise ValueError(f"split type {self.split_type} not supported yet")
+
+        indices = np.arange(nr_samples)
+
+        test_size = sum(self.split_size[1:])
+        train_indices, val_indices = train_test_split(indices, test_size=test_size, random_state=self.split_seed)
+
+        if self.split_size[-1] > 0 and len(self.split_size) == 3:
+            test_size = self.split_size[-1] / test_size
+            val_indices, test_indices = train_test_split(val_indices, test_size=test_size, random_state=self.split_seed)
+        else:
+            test_indices = None
+
+        return train_indices, val_indices, test_indices
+
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, pin_memory=True)
 
@@ -175,6 +206,40 @@ class HERGClassifierDataModule(pl.LightningDataModule):
             return DataLoader(self.test_dataset, batch_size=len(self.test_dataset), num_workers=self.num_workers, pin_memory=True)
         else:
             return None
+
+    def atomic_attributions(self,
+                            smiles: List[str],
+                            feature_attributions: np.ndarray,
+                            postprocess: Optional[str] = None
+                            ) -> List[np.ndarray]:
+        if len(smiles) != len(feature_attributions):
+            raise ValueError(f"number of smiles {len(smiles)} must match the number of feature attributions {len(feature_attributions)}")
+
+        featurizer_atomic_attributions = []
+        ptr = 0
+        for featurizer in self.featurizer:
+            _fa = feature_attributions[:, ptr:ptr + featurizer.n_features]
+
+            featurizer_atomic_attributions.append(featurizer.atomic_attributions(smiles, _fa))
+            ptr += featurizer.n_features
+
+        atomic_attributions = []
+        for i in range(len(smiles)):
+
+            _aa = None
+            for _faa in featurizer_atomic_attributions:
+                _aa = _aa + _faa[i] if _aa is not None else _faa[i]
+
+            if postprocess == "normalize":
+                _aa = (_aa - np.min(_aa)) / (
+                        np.max(_aa) - np.min(_aa))
+            elif postprocess == "standardize":
+                _aa = (_aa - np.mean(_aa)) / np.std(_aa)
+
+            atomic_attributions.append(_aa)
+
+        return atomic_attributions
+
 
     @property
     def num_classes(self) -> Union[int, List[int]]:
