@@ -230,7 +230,7 @@ def plot_masks(inputs: torch.Tensor,
     # labels as y ticks
     if labels is not None:
         labels = labels.detach().cpu()[:nr_samples, ...]
-        labels = [str(l.item()) for l in labels]
+        labels = [str(l.item()) if l.ndim == 0 else str(l).replace("tensor(", "").replace(")", "") for l in labels]
         # labels = labels.unsqueeze(dim=-1)
 
         for i in range(nr_figures):
