@@ -12,7 +12,7 @@ import pytest
                 "C1CC[C@@H](C)N1CCc(cc2)cc(c23)ccc(n3)-c4c(C)nc(s4)N5CCOCC5",
                 "c1cc(C)nc(c12)cccc2N(C[C@@H]3C)CCN3CCc(ccc4)c(c45)ccc(=O)n5C",
                 "c1cc(C)nc(c12)cccc2N(CC3)CCN3CCCc(ccc4)c(c45)OCC(=O)N5C",
-            ]
+            ] * 10
     )
 ])
 def sample_smiles(request):
@@ -125,13 +125,17 @@ class TestMACCSFeaturizer():
 
         assert len(sample_smiles) == len(desc)
 
-    def test_atomic_attribution(self, sample_smiles):
+    @pytest.mark.parametrize("n_jobs",
+                             [
+                                 (1), (4), (None),
+                             ])
+    def test_atomic_attribution(self, sample_smiles, n_jobs):
         """basic maccs featurizer tests"""
 
         from datasets.featurizer import MACCSFeaturizer
         import numpy as np
 
-        featurizer = MACCSFeaturizer()
+        featurizer = MACCSFeaturizer(n_jobs) if n_jobs else MACCSFeaturizer()
         features = featurizer(sample_smiles)
 
         dummy_attribution = np.random.binomial(1, 0.3, size=features.shape) * np.random.random(features.shape)
@@ -156,13 +160,17 @@ class TestToxFeaturizer:
 
         assert len(sample_smiles) == len(features)
 
-    def test_atomic_attribution(self, sample_smiles):
+    @pytest.mark.parametrize("n_jobs",
+                             [
+                                 (1), (4), (None),
+                             ])
+    def test_atomic_attribution(self, sample_smiles, n_jobs):
         """basic maccs attribution tests"""
 
         from datasets.featurizer import ToxFeaturizer
         import numpy as np
 
-        featurizer = ToxFeaturizer()
+        featurizer = ToxFeaturizer(n_jobs) if n_jobs else ToxFeaturizer()
         features = featurizer(sample_smiles)
 
         dummy_attribution = np.random.binomial(1, 0.3, size=features.shape) * np.random.random(features.shape)
