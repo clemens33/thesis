@@ -8,8 +8,20 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, Mol, MACCSkeys
 from sklearn.feature_extraction import DictVectorizer
+from sklearn.metrics import roc_auc_score
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
+
+
+def _init_molecule(molecule: Union[str, Mol, bytes]) -> Mol:
+    if isinstance(molecule, bytes):
+        mol = Mol(molecule)
+    elif isinstance(molecule, Mol):
+        mol = molecule
+    else:
+        mol = Chem.MolFromSmiles(molecule)
+
+    return mol
 
 
 class ECFC_featurizer():
@@ -180,7 +192,8 @@ class ECFPFeaturizer():
             self._fit(fingerprints)
 
         atomic_attributions = []
-        for i, (smile, fingerprint, bit_info, mol) in enumerate(zip(smiles, fingerprints, bit_infos, mols)):
+        for i, (smile, fingerprint, bit_info, mol) in tqdm(enumerate(zip(smiles, fingerprints, bit_infos, mols)), total=len(smiles),
+                                                           desc="_ecfp_atomic_attributions"):
             if mol is None:
                 raise ValueError(f"could not process smile/molecule {i}: {smile}")
 
@@ -232,12 +245,7 @@ class MACCSFeaturizer():
         return 167
 
     def _macc(self, molecule: Union[str, Mol, bytes]) -> np.ndarray:
-        if isinstance(molecule, bytes):
-            mol = Mol(molecule)
-        elif isinstance(molecule, Mol):
-            mol = molecule
-        else:
-            mol = Chem.MolFromSmiles(molecule)
+        mol = _init_molecule(molecule)
 
         _maccs = MACCSkeys.GenMACCSKeys(mol)
 
@@ -264,9 +272,11 @@ class MACCSFeaturizer():
     def __call__(self, smiles: List[str]) -> np.ndarray:
         return self._maccs(smiles)[0]
 
-    def _atomic_attribution(self, mol: Mol, feature_attribution: np.ndarray, num_atoms: Optional[int] = None) -> np.ndarray:
+    def _atomic_attribution(self, molecule: Union[str, Mol, bytes], feature_attribution: np.ndarray,
+                            num_atoms: Optional[int] = None) -> np.ndarray:
         """adapted/based on the implementation by J. Schimunek"""
 
+        mol = _init_molecule(molecule)
         num_atoms = mol.GetNumAtoms() if not num_atoms else num_atoms
 
         idx_maccs = list(MACCSFeaturizer.SMARTS_SUBSTR.keys())
@@ -406,15 +416,14 @@ class MACCSFeaturizer():
             feature_attributions), f"provided number of smiles {len(smiles)} does not match number of features {len(feature_attributions)}"
 
         _, mols = self._maccs(smiles)
+        _mols = [m.ToBinary() for m in mols if m]
 
-        atomic_attributions = []
-        for i, (smile, mol) in enumerate(zip(smiles, mols)):
-            if mol is None:
-                raise ValueError(f"could not process smile/molecule {i}: {smile}")
-
-            atomic_attribution = self._atomic_attribution(mol, feature_attributions[i])
-
-            atomic_attributions.append(atomic_attribution)
+        if self.n_jobs > 1:
+            atomic_attributions = process_map(self._atomic_attribution, _mols, feature_attributions, max_workers=self.n_jobs,
+                                              desc="_maccs_atomic_attributions")
+        else:
+            atomic_attributions = list(
+                map(self._atomic_attribution, tqdm(_mols, total=len(smiles), desc="_maccs_atomic_attributions"), feature_attributions))
 
         return atomic_attributions
 
@@ -569,12 +578,7 @@ class ToxFeaturizer():
         Matches the tox patterns against a molecule. Returns a boolean array
         """
 
-        if isinstance(molecule, bytes):
-            mol = Mol(molecule)
-        elif isinstance(molecule, Mol):
-            mol = molecule
-        else:
-            mol = Chem.MolFromSmiles(molecule)
+        mol = _init_molecule(molecule)
 
         mol_features = []
         for patts, negations, merge_any in ToxFeaturizer.ALL_PATTERNS:
@@ -611,9 +615,11 @@ class ToxFeaturizer():
 
         return self._toxs(smiles)[0]
 
-    def _atomic_attribution(self, mol: Mol, feature_attribution: np.ndarray, num_atoms: Optional[int] = None) -> np.ndarray:
+    def _atomic_attribution(self, molecule: Union[str, Mol, bytes], feature_attribution: np.ndarray,
+                            num_atoms: Optional[int] = None) -> np.ndarray:
         """adapted/based on the implementation by J. Schimunek"""
 
+        mol = _init_molecule(molecule)
         num_atoms = mol.GetNumAtoms() if not num_atoms else num_atoms
 
         atomic_attribution = np.zeros(num_atoms)
@@ -657,14 +663,34 @@ class ToxFeaturizer():
             feature_attributions), f"provided number of smiles {len(smiles)} does not match number of features {len(feature_attributions)}"
 
         _, mols = self._toxs(smiles)
+        _mols = [m.ToBinary() for m in mols if m]
 
-        atomic_attributions = []
-        for i, (smile, mol) in enumerate(zip(smiles, mols)):
-            if mol is None:
-                raise ValueError(f"could not process smile/molecule {i}: {smile}")
-
-            atomic_attribution = self._atomic_attribution(mol, feature_attributions[i])
-
-            atomic_attributions.append(atomic_attribution)
+        if self.n_jobs > 1:
+            atomic_attributions = process_map(self._atomic_attribution, _mols, feature_attributions, max_workers=self.n_jobs,
+                                              desc="_tox_atomic_attributions")
+        else:
+            atomic_attributions = list(
+                map(self._atomic_attribution, tqdm(_mols, total=len(smiles), desc="_tox_atomic_attributions"), feature_attributions))
 
         return atomic_attributions
+
+
+def match(smiles: List[str], reference_smile: str, atomic_attributions: List[np.ndarray]) -> np.ndarray:
+    reference_mol = Chem.MolFromSmiles(reference_smile)
+
+    aurocs = []
+    for i, smile in enumerate(smiles):
+        mol = Chem.MolFromSmiles(smile)
+        num_atoms = mol.GetNumAtoms()
+
+        match = mol.GetSubstructMatch(reference_mol)
+
+        if match:
+            reference_atoms = [1 if i in match else 0 for i in range(num_atoms)]
+
+            auroc = roc_auc_score(reference_atoms, atomic_attributions[i])
+            aurocs.append(auroc)
+        else:
+            aurocs.append(float("nan"))
+
+    return np.array(aurocs)
