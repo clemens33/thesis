@@ -5,6 +5,7 @@ from pathlib import PurePosixPath, Path
 from typing import Optional, List, Tuple, Dict, Union
 
 import numpy as np
+import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import AllChem, Mol, MACCSkeys
 from sklearn.feature_extraction import DictVectorizer
@@ -675,22 +676,54 @@ class ToxFeaturizer():
         return atomic_attributions
 
 
-def match(smiles: List[str], reference_smile: str, atomic_attributions: List[np.ndarray]) -> np.ndarray:
-    reference_mol = Chem.MolFromSmiles(reference_smile)
+def match(smiles: List[str], reference_smiles: List[str], atomic_attributions: List[np.ndarray]) -> Tuple[List[dict], pd.DataFrame]:
+    df = pd.DataFrame()
+    df["smiles"] = smiles
 
-    aurocs = []
-    for i, smile in enumerate(smiles):
-        mol = Chem.MolFromSmiles(smile)
-        num_atoms = mol.GetNumAtoms()
+    mean_aurocs = []
+    results = []
+    for reference_smile in tqdm(reference_smiles):
+        reference_mol = Chem.MolFromSmiles(reference_smile)
 
-        match = mol.GetSubstructMatch(reference_mol)
+        matches, attributions, aurocs = [], [], []
+        for i, smile in enumerate(smiles):
+            mol = Chem.MolFromSmiles(smile)
+            num_atoms = mol.GetNumAtoms()
 
-        if match:
-            reference_atoms = [1 if i in match else 0 for i in range(num_atoms)]
+            match = mol.GetSubstructMatch(reference_mol)
 
-            auroc = roc_auc_score(reference_atoms, atomic_attributions[i])
-            aurocs.append(auroc)
-        else:
-            aurocs.append(float("nan"))
+            if match:
+                reference_atoms = [1 if i in match else 0 for i in range(num_atoms)]
 
-    return np.array(aurocs)
+                auroc = roc_auc_score(reference_atoms, atomic_attributions[i])
+                aurocs.append(auroc)
+
+                matches.append(str(reference_atoms))
+            else:
+                aurocs.append(float("nan"))
+                matches.append("n/a")
+
+            attributions.append(str(atomic_attributions[i]))
+
+        mean_aurocs.append(np.nanmean(aurocs))
+
+        results.append({
+            reference_smile: {
+                "count_match": int(sum(~np.isnan(aurocs))),
+                "mean_auroc": float(np.nanmean(aurocs)),
+                "max_auroc": float(np.nanmax(aurocs)),
+                "min_auroc": float(np.nanmin(aurocs)),
+            }
+        })
+
+        df[reference_smile + " | match"] = matches
+        df[reference_smile + " | atomic_attribution"] = attributions
+        df[reference_smile + " | auroc"] = aurocs
+
+    results.append({
+        "summary": {
+            "mean_aurocs": np.array(mean_aurocs).mean(),
+        }
+    })
+
+    return results, df

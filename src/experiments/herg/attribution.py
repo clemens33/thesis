@@ -1,17 +1,66 @@
+import json
 import multiprocessing
 import os
 import sys
+import tempfile
 from argparse import Namespace, ArgumentParser
-from typing import List
+from pprint import pprint
+from typing import Optional, List
 
-import numpy as np
 import torch
 from mlflow.tracking import MlflowClient
 from pytorch_lightning.loggers import MLFlowLogger
 
-from datasets import HERGClassifierDataModule
+from datasets import HERGClassifierDataModule, Hergophores
 from datasets.featurizer import match
-from tabnet_lightning import TabNetClassifier, TabNetTrainer
+from tabnet_lightning import TabNetClassifier
+
+
+def attribution(model: TabNetClassifier,
+                dm: HERGClassifierDataModule,
+                type: str,
+                reference_smiles: Optional[List[str]] = None,
+                out_dir: str = str(tempfile.mkdtemp()) + "/",
+                out_fname: str = None,
+                ):
+    if type == "train":
+        data_loader = dm.train_dataloader()
+        smiles = dm.data.iloc[dm.train_indices]["smiles"]
+    elif type == "val":
+        data_loader = dm.val_dataloader()
+        smiles = dm.data.iloc[dm.val_indices]["smiles"]
+    elif type == "test":
+        data_loader = dm.test_dataloader()
+        smiles = dm.data.iloc[dm.test_indices]["smiles"]
+    else:
+        raise ValueError(f"unknown data type {type}")
+
+    attribution, probs = [], []
+    for batch in data_loader:
+        _, _probs, _, _mask, *_ = model(*batch)
+
+        attribution.append(_mask)
+        probs.append(_probs)
+
+    attribution = torch.cat(attribution)
+    probs = torch.cat(probs)
+
+    atomic_attributions = dm.atomic_attributions(smiles=smiles,
+                                                 feature_attributions=attribution.detach().cpu().numpy(), postprocess="normalize")
+
+    reference_smiles = Hergophores.get() if not reference_smiles else reference_smiles
+    results, df = match(smiles=smiles, reference_smiles=reference_smiles, atomic_attributions=atomic_attributions)
+
+    out_fname = type + "_dataset" if not out_fname else out_fname
+
+    out_path_df = out_dir + out_fname + "-" + "attribution_details" + ".tsv"
+    df.to_csv(out_path_df, sep="\t")
+
+    out_path_results = out_dir + out_fname + "-" + "attribution_results" + ".json"
+    with open(out_path_results, "w") as f:
+        f.write(json.dumps(results))
+
+    return results, out_path_df, out_path_results
 
 
 def match_fn(args: Namespace):
@@ -42,37 +91,10 @@ def match_fn(args: Namespace):
     dm.prepare_data()
     dm.setup()
 
-    # dm.log_hyperparameters(mlf_logger)
+    results, out_path_df, out_path_results = attribution(model, dm, type="test")
 
-    model.log_metrics = args.log_metrics
-    model.log_sparsity = args.log_sparsity
-    # mlf_logger.experiment.log_param(run_id=mlf_logger.run_id, key="trainable_parameters",
-    #                                 value=sum(p.numel() for p in classifier.parameters() if p.requires_grad))
-
-    attribution, probs = [], []
-    for batch in dm.train_dataloader():
-        _, _probs, _, _mask, *_ = model(*batch)
-
-        attribution.append(_mask)
-        probs.append(_probs)
-
-    attribution = torch.cat(attribution)
-    probs = torch.cat(probs)
-
-    smiles = dm.data.iloc[dm.train_indices]
-    smiles = smiles["smiles"].tolist()
-
-    # feature_attributions = attribution.detach().cpu().numpy()
-
-    hergo = "c1ccccc1Cc1ccccc1"
-    atomic_attributions = dm.atomic_attributions(smiles=smiles,
-                                                 feature_attributions=attribution.detach().cpu().numpy())  # , postprocess="normalize")
-
-    aurocs = match(smiles=smiles, reference_smile=hergo, atomic_attributions=atomic_attributions)
-
-    print(np.nanmax(aurocs))
-    print(np.nanmean(aurocs))
-    print(sum(~np.isnan(aurocs)))
+    mlf_logger.experiment.log_artifact(run_id=mlf_logger._run_id, local_path=out_path_df)
+    mlf_logger.experiment.log_artifact(run_id=mlf_logger._run_id, local_path=out_path_results)
 
 
 def manual_args(args: Namespace) -> Namespace:
@@ -82,6 +104,9 @@ def manual_args(args: Namespace) -> Namespace:
     args.experiment_name = "herg_tn_opt1"
     args.experiment_id = "152"
     args.run_id = "38a991230dca488b9b3d107e1ca9fcc7"
+    # args.run_id = "c244505250e24ba889c8a144488b926d"
+    # args.run_id = "4e9cbbcdb36f4691a34af0ecfc1b94ca"
+    # args.run_id = "b12fbb9514444737b9e37cab856514ec"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.checkpoint_name = "epoch=5-step=221.ckpt"
     args.checkpoint_path = "./" + args.experiment_id + "/" + args.run_id + "/checkpoints/"
