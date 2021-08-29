@@ -178,3 +178,25 @@ class TestToxFeaturizer:
         atomic_attribution = featurizer.atomic_attributions(sample_smiles, dummy_attribution)
 
         assert len(sample_smiles) == len(atomic_attribution)
+
+
+@pytest.mark.parametrize("reference_smiles",
+                         [
+                             (["n1ccccc1", "n1ccccc1C", "c1cc(C)ccc1C"]),
+                             (["Cc1ccccc1"]),
+                         ])
+def test_match(sample_smiles, reference_smiles):
+    from datasets.featurizer import match
+    from rdkit import Chem
+    import numpy as np
+
+    dummy_attribution = []
+    for smile in sample_smiles:
+        mol = Chem.MolFromSmiles(smile)
+
+        dummy_attribution.append(np.random.rand(mol.GetNumAtoms()))
+
+    results, df = match(sample_smiles, reference_smiles, dummy_attribution)
+
+    assert len(df) == len(sample_smiles)
+    assert len(results) == len(reference_smiles)
