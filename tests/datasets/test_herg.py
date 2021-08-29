@@ -2,6 +2,20 @@ import pytest
 from tempfile import mkdtemp
 
 
+class TestHergophores():
+
+    @pytest.mark.parametrize("by_groups", [
+        (None),
+        ("substructures_inactive_functional_1um"),
+    ])
+    def test_get(self, by_groups):
+        from datasets import Hergophores
+
+        hergophores = Hergophores.get(by_groups)
+
+        assert len(hergophores) > 0
+
+
 class TestHERGClassifierDataset():
 
     @pytest.fixture(scope="session")

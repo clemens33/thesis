@@ -17,6 +17,65 @@ from torch.utils.data import TensorDataset, DataLoader
 from datasets.featurizer import ECFPFeaturizer, MACCSFeaturizer, ToxFeaturizer
 
 
+class Hergophores:
+    grouped = {
+        "substructures_active_binding_1um": [
+            "c1ccccc1CCNC",
+            "c1ccccc1CN2CCCCC2",
+            "c1ccccc1C(F)(F)F", # na
+        ],
+        "substructures_active_binding_10um": [
+            "CCOc1ccccc1",
+            "c1ccccc1CNCC",
+        ],
+        "substructures_active_functional_1um": [
+            "c1ccccc1Cc1ccccc1",
+            "NCCc1ccccc1",
+        ],
+        "substructures_active_functional_10um": [
+            "CCc1ccccc1",
+            "Oc1ccccc1",
+            "NCCc1ccccc1",
+        ],
+        "substructures_inactive_binding_1um": [
+            "n1ccccc1",
+            "COc1ccccc1",
+            "n1ccccc1C",
+            "NCCc1ccccc1", # na
+            "c1ccccc1C(F)(F)F", # na
+        ],
+        "substructures_inactive_binding_10um": [
+            "n1ccccc1",
+            "n1ccccc1C",
+            "c1cc(C)ccc1C",
+            "NCCc1ccccc1", # na
+            "CCNCc1ccccc1",
+        ],
+        "substructures_inactive_functional_1um": [
+            "Oc1ccccc1",
+            "CCc1ccccc1",
+        ],
+        "substructures_inactive_functional_10um": [
+            "Cc1ccccc1",
+            "CCc1ccccc1",
+        ],
+    }
+
+
+
+    @staticmethod
+    def get(by_groups: Optional[Union[str, List[str]]] = None) -> List[str]:
+        by_groups = [*Hergophores.grouped] if by_groups is None else by_groups
+        by_groups = [by_groups] if not isinstance(by_groups, list) else by_groups
+
+        hergophores = []
+        for k, v in Hergophores.grouped.items():
+            if k in by_groups:
+                hergophores += v
+
+        return list(set(hergophores))
+
+
 class HERGClassifierDataModule(pl.LightningDataModule):
     DATA_PATH = Path(PurePosixPath(__file__)).parent.parent.parent / "data/herg/data_filtered.tsv"
     IGNORE_INDEX = -100
@@ -239,7 +298,6 @@ class HERGClassifierDataModule(pl.LightningDataModule):
             atomic_attributions.append(_aa)
 
         return atomic_attributions
-
 
     @property
     def num_classes(self) -> Union[int, List[int]]:
