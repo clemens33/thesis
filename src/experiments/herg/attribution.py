@@ -4,8 +4,7 @@ import os
 import sys
 import tempfile
 from argparse import Namespace, ArgumentParser
-from pprint import pprint
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 import torch
 from mlflow.tracking import MlflowClient
@@ -46,7 +45,7 @@ def attribution(model: TabNetClassifier,
     probs = torch.cat(probs)
 
     atomic_attributions = dm.atomic_attributions(smiles=smiles,
-                                                 feature_attributions=attribution.detach().cpu().numpy(), postprocess="normalize")
+                                                 feature_attributions=attribution.detach().cpu().numpy())
 
     reference_smiles = Hergophores.get() if not reference_smiles else reference_smiles
     results, df = match(smiles=smiles, reference_smiles=reference_smiles, atomic_attributions=atomic_attributions)
@@ -61,6 +60,35 @@ def attribution(model: TabNetClassifier,
         f.write(json.dumps(results))
 
     return results, out_path_df, out_path_results
+
+
+def log_attribution(model: TabNetClassifier, dm: HERGClassifierDataModule, logger: MLFlowLogger, type: Optional[List[str]] = None) -> Dict:
+    if type is None:
+        type = ["train", "val", "test"]
+
+    value = lambda v: v if len(str(v)) <= 250 else "...value too long for mlflow - not inserted"
+
+    ret = {}
+    for t in type:
+        results, out_path_df, out_path_results = attribution(model, dm, type=t)
+
+        logger.experiment.log_artifact(run_id=logger._run_id, local_path=out_path_df)
+        logger.experiment.log_artifact(run_id=logger._run_id, local_path=out_path_results)
+
+        for i, result in enumerate(results[:-1]):
+            for smile, attribution_results in result.items():
+                logger.experiment.log_param(run_id=logger._run_id, key="smile" + str(i), value=value(smile))
+                logger.experiment.log_metric(run_id=logger._run_id, key=t + "/" + "smile" + str(i) + "-" + "mean_auroc",
+                                             value=attribution_results["mean_auroc"])
+
+                ret[t + "/" + "smile" + str(i) + "-" + "mean_auroc"] = attribution_results["mean_auroc"]
+
+        attribution_summary = results[-1]["attribution_summary"]
+        logger.experiment.log_metric(run_id=logger._run_id, key=t + "/" + "smile-mean_aurocs", value=attribution_summary["mean_aurocs"])
+
+        ret[t + "/" + "smile-mean_aurocs"] = attribution_summary["mean_aurocs"]
+
+    return ret
 
 
 def match_fn(args: Namespace):
