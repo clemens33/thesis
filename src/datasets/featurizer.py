@@ -69,7 +69,8 @@ class ECFPFeaturizer():
                  use_chirality: bool = True,
                  use_features: bool = True,
                  return_count: bool = True,
-                 map_dict: Optional[dict] = None
+                 map_dict: Optional[dict] = None,
+                 n_jobs: int = multiprocessing.cpu_count(),
                  ):
 
         self.radius = radius
@@ -78,6 +79,7 @@ class ECFPFeaturizer():
         self.use_features = use_features
         self.map_dict = map_dict
         self.return_count = return_count
+        self.n_jobs = n_jobs
 
     @property
     def n_features(self) -> int:
@@ -86,23 +88,30 @@ class ECFPFeaturizer():
         else:
             return self.fold
 
-    def _ecfp(self, smiles: List[str]) -> Tuple[List[dict], List[dict], List[Mol]]:
-        fingerprints, bit_infos, mols = [], [], []
+    def _ecfp(self, smile: str) -> Union[Tuple[Dict, Dict, Mol], Tuple[None, None, None]]:
+        mol = Chem.MolFromSmiles(smile)
 
-        for idx, smile in enumerate(tqdm(smiles, desc="_ecfp")):
-            mol = Chem.MolFromSmiles(smile)
-            mols.append(mol)
+        if mol is None:
+            warnings.warn(f"could not parse smile: {smile}")
 
-            if mol is None:
-                warnings.warn(f"could not parse smile {idx}: {smile}")
+            return None, None, None
+        else:
+            bit_info = {}
+            fingerprint = AllChem.GetMorganFingerprint(mol, radius=self.radius, useChirality=self.use_chirality,
+                                                       useFeatures=self.use_features, bitInfo=bit_info).GetNonzeroElements()
 
-                fingerprints.append(None)
-                bit_infos.append(None)
-            else:
-                bit_info = {}
-                fingerprints.append(AllChem.GetMorganFingerprint(mol, radius=self.radius, useChirality=self.use_chirality,
-                                                                 useFeatures=self.use_features, bitInfo=bit_info).GetNonzeroElements())
-                bit_infos.append(bit_info)
+            return fingerprint, bit_info, mol
+
+    def ecfp(self, smiles: List[str]) -> Tuple[List[dict], List[dict], List[Mol]]:
+
+        if self.n_jobs > 1:
+            fingerprints, bit_infos, mols = zip(
+                *process_map(self._ecfp, smiles,
+                             # chunksize=(len(smiles) // self.n_jobs) + 1,
+                             chunksize=1,
+                             max_workers=self.n_jobs, desc="_ecfp"))
+        else:
+            fingerprints, bit_infos, mols = zip(*list(map(self._ecfp, tqdm(smiles, total=len(smiles), desc="_ecfp"))))
 
         return fingerprints, bit_infos, mols
 
@@ -116,7 +125,7 @@ class ECFPFeaturizer():
                 self.map_dict = {f: f % self.fold for f in features}
 
     def fit_transform(self, smiles: List[str]) -> np.ndarray:
-        fingerprints, *_ = self._ecfp(smiles)
+        fingerprints, *_ = self.ecfp(smiles)
         self._fit(fingerprints)
 
         desc_mat = np.zeros((len(fingerprints), self.n_features), dtype=np.uint8)
@@ -187,7 +196,7 @@ class ECFPFeaturizer():
         assert len(smiles) == len(
             feature_attributions), f"provided number of smiles {len(smiles)} does not match number of features {len(feature_attributions)}"
 
-        fingerprints, bit_infos, mols = self._ecfp(smiles)
+        fingerprints, bit_infos, mols = self.ecfp(smiles)
 
         if self.map_dict is None:
             self._fit(fingerprints)
@@ -264,7 +273,11 @@ class MACCSFeaturizer():
 
         _mols = [m.ToBinary() for m in mols if m]
         if self.n_jobs > 1:
-            maccs = process_map(self._macc, _mols, max_workers=self.n_jobs, desc="_maccs")
+            maccs = process_map(self._macc, _mols,
+                                # chunksize=(len(smiles) // self.n_jobs) + 1,
+                                chunksize=1,
+                                max_workers=self.n_jobs,
+                                desc="_maccs")
         else:
             maccs = list(map(self._macc, _mols))
 
@@ -420,7 +433,10 @@ class MACCSFeaturizer():
         _mols = [m.ToBinary() for m in mols if m]
 
         if self.n_jobs > 1:
-            atomic_attributions = process_map(self._atomic_attribution, _mols, feature_attributions, max_workers=self.n_jobs,
+            atomic_attributions = process_map(self._atomic_attribution, _mols, feature_attributions,
+                                              # chunksize=(len(smiles) // self.n_jobs) + 1,
+                                              chunksize=1,
+                                              max_workers=self.n_jobs,
                                               desc="_maccs_atomic_attributions")
         else:
             atomic_attributions = list(
@@ -605,7 +621,11 @@ class ToxFeaturizer():
 
         _mols = [m.ToBinary() for m in mols if m]
         if self.n_jobs > 1:
-            toxs = process_map(self._tox, _mols, max_workers=self.n_jobs, desc="_toxs")
+            toxs = process_map(self._tox, _mols,
+                               # chunksize=(len(smiles) // self.n_jobs) + 1,
+                               chunksize=1,
+                               max_workers=self.n_jobs,
+                               desc="_toxs")
         else:
             toxs = list(map(self._tox, _mols))
 
@@ -667,7 +687,10 @@ class ToxFeaturizer():
         _mols = [m.ToBinary() for m in mols if m]
 
         if self.n_jobs > 1:
-            atomic_attributions = process_map(self._atomic_attribution, _mols, feature_attributions, max_workers=self.n_jobs,
+            atomic_attributions = process_map(self._atomic_attribution, _mols, feature_attributions,
+                                              chunksize=(len(smiles) // self.n_jobs) + 1,
+                                              # chunksize=1,
+                                              max_workers=self.n_jobs,
                                               desc="_tox_atomic_attributions")
         else:
             atomic_attributions = list(
@@ -695,8 +718,11 @@ def match(smiles: List[str], reference_smiles: List[str], atomic_attributions: L
             if match:
                 reference_atoms = [1 if i in match else 0 for i in range(num_atoms)]
 
-                auroc = roc_auc_score(reference_atoms, atomic_attributions[i])
-                aurocs.append(auroc)
+                if not np.isnan(atomic_attributions[i]).any():
+                    auroc = roc_auc_score(reference_atoms, atomic_attributions[i])
+                    aurocs.append(auroc)
+                else:
+                    aurocs.append(float("nan"))
 
                 matches.append(str(reference_atoms))
             else:
@@ -721,7 +747,7 @@ def match(smiles: List[str], reference_smiles: List[str], atomic_attributions: L
         df[reference_smile + " | auroc"] = aurocs
 
     results.append({
-        "summary": {
+        "attribution_summary": {
             "mean_aurocs": np.array(mean_aurocs).mean(),
         }
     })
