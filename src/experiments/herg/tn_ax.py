@@ -1,10 +1,11 @@
-import sys
+import multiprocessing
 import os
-import random
+import sys
 from argparse import Namespace, ArgumentParser
 
-from tn import train_tn
 from experiments import TuneAx
+from experiments.kfold import Kfold
+from tn import train_tn, train_tn_kfold
 
 
 def train_evaluate(args: Namespace):
@@ -13,17 +14,39 @@ def train_evaluate(args: Namespace):
     # args.scheduler_params["decay_step"] = args.decay_step
     # args.scheduler_params["decay_rate"] = args.decay_rate
 
-    results_test, results_val_best, results_val_last, *_ = train_tn(args)
+    if "kfold" in args.split_type:
+        kfold = Kfold(
+            function=train_tn_kfold,
+            args=args,
+            **vars(args)
+        )
+        results = kfold.train()
 
-    metric = results_val_best[args.objective_name]
-    # metric = results_val_last[args.objective_name]
-    # metric= random.random()
+        metric = results[args.objective_name]
+        # additional_metric = results.get("test/rs-mean_aurocs", .0)
+        # additional_metric = results.get("val/Accuracy", .0)
+        additional_metric = .0
+
+        metric += additional_metric
+    else:
+        results_test, results_val_best, results_val_last, *_ = train_tn(args)
+
+        metric = results_val_best[args.objective_name]
 
     return metric
 
 
 def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
+    # kfold options
+    args.track_metrics = [
+        "val/AUROC",
+        "val/Accuracy",
+        "test/AUROC",
+        "test/Accuracy",
+        "test/smile-mean_aurocs",
+    ]
+    args.track_metrics += ["test/smile" + str(i) + "-mean_auroc" for i in range(20)]
 
     # ax args
     args.trials = 30
@@ -50,17 +73,22 @@ def manual_args(args: Namespace) -> Namespace:
     ]
 
     # trainer/logging args
-    args.experiment_name = "herg_tn_ax1"
+    args.experiment_name = "herg_tn_kfold_ax2"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
-    args.seed = 0
+    args.seed = 9
     args.patience = 50
 
     # data module args
-    args.batch_size = 64
-    args.split_seed = 0
+    args.batch_size = 128
+    args.split_type = "random_kfold"
+    args.split_size = (5, 0, 1)
+    # args.split_type = "random"
+    # args.split_size = (0.6, 0.2, 0.2)
+    args.split_seed = 9
+    args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
 
-    args.featurizer_name = "combined" # ecfp + macc + tox
+    args.featurizer_name = "combined"  # ecfp + macc + tox
     args.featurizer_kwargs = {
         "fold": 1024,
         "radius": 3,
@@ -69,7 +97,9 @@ def manual_args(args: Namespace) -> Namespace:
         "use_features": True,
     }
 
-    args.num_workers = 8
+    args.num_workers = multiprocessing.cpu_count()
+    # args.num_workers = 0
+
     args.cache_dir = "../../../" + "data/herg/"
 
     # model args
@@ -99,12 +129,12 @@ def manual_args(args: Namespace) -> Namespace:
     # args.virtual_batch_size = 256  # -1 do not use any batch normalization
 
     args.lr = 0.001
-    #args.optimizer = "adam"
+    # args.optimizer = "adam"
     # args.scheduler = "exponential_decay"
     # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
 
-    args.optimizer="adamw"
-    args.optimizer_params={"weight_decay": 0.0001}
+    args.optimizer = "adamw"
+    args.optimizer_params = {"weight_decay": 0.0001}
     args.scheduler = "linear_with_warmup"
     # args.scheduler_params = {"warmup_steps": 10}
     args.scheduler_params = {"warmup_steps": 0.1}
@@ -112,6 +142,8 @@ def manual_args(args: Namespace) -> Namespace:
     args.log_sparsity = True
     # args.log_sparsity = "verbose"
     # args.log_parameters = False
+    args.attribution = ["test"]
+    # args.attribution = None
 
     return args
 

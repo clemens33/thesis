@@ -1,8 +1,9 @@
+import multiprocessing
 import os
 import sys
 import traceback
 from argparse import Namespace, ArgumentParser
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 import torch
 from pytorch_lightning import seed_everything
@@ -10,10 +11,32 @@ from pytorch_lightning.callbacks import LearningRateMonitor, EarlyStopping, Mode
 from pytorch_lightning.loggers import MLFlowLogger
 
 from datasets import HERGClassifierDataModule
+from experiments.herg.attribution import attribution, log_attribution
+from experiments.kfold import Kfold
 from tabnet_lightning import TabNetClassifier, TabNetTrainer
 
 
-def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassifier, TabNetTrainer, HERGClassifierDataModule]:
+def train_tn_kfold(args: Namespace, split_size: Tuple[int, ...], split_seed: int) -> Dict[str, float]:
+    """helper function to be called from Kfold implementation"""
+
+    args.split_size = split_size
+    args.split_seed = split_seed
+
+    results_test, results_val_best, results_val_last, results_attribution, *_ = train_tn(args)
+
+    metrics = {}
+    for metric_name in args.track_metrics:
+        if metric_name in results_test:
+            metrics[metric_name] = results_test[metric_name]
+        if metric_name in results_val_best:
+            metrics[metric_name] = results_val_best[metric_name]
+        elif metric_name in results_attribution:
+            metrics[metric_name] = results_attribution[metric_name]
+
+    return metrics
+
+
+def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, TabNetClassifier, TabNetTrainer, HERGClassifierDataModule]:
     mlf_logger = MLFlowLogger(
         experiment_name=args.experiment_name,
         tracking_uri=args.tracking_uri,
@@ -23,10 +46,11 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
     dm = HERGClassifierDataModule(
         batch_size=args.batch_size,
         split_seed=args.split_seed,
-        split_type="random",
-        split_size=(0.6, 0.2, 0.2),
+        split_type=args.split_type,
+        split_size=args.split_size,
         num_workers=args.num_workers,
         cache_dir=args.cache_dir,
+        # use_labels=args.use_labels,
         use_cache=True,
         featurizer_name=args.featurizer_name,
         featurizer_kwargs=args.featurizer_kwargs
@@ -54,13 +78,13 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
 
     callbacks = [
         ModelCheckpoint(
-            monitor="val/loss",
-            mode="min",
+            monitor=args.objective_name,
+            mode="max" if not args.minimize else "min",
         ),
         EarlyStopping(
-            monitor="val/loss",
+            monitor=args.objective_name,
             patience=args.patience,
-            mode="min"
+            mode="max" if not args.minimize else "min",
         ),
         LearningRateMonitor(logging_interval="step"),
     ]
@@ -107,22 +131,46 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
 
     results_test = trainer.test(test_dataloaders=dm.test_dataloader())
 
-    return results_test[0], results_val_best, results_val_last, classifier, trainer, dm
+    results_attribution = {}
+    if args.attribution:
+        model = TabNetClassifier.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
+
+        results_attribution = log_attribution(model, dm, mlf_logger, type=args.attribution)
+
+    return results_test[0], results_val_best, results_val_last, results_attribution, classifier, trainer, dm
 
 
 def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
 
+    # kfold options
+    args.track_metrics = [
+        "val/AUROC",
+        "val/Accuracy",
+        "test/AUROC",
+        "test/Accuracy",
+        "test/smile-mean_aurocs",
+    ]
+    args.track_metrics += ["test/smile" + str(i) + "-mean_auroc" for i in range(20)]
+
     # trainer/logging args
-    args.experiment_name = "herg_tn2"
+    args.objective_name = "val/AUROC"
+    args.minimize = False
+    args.experiment_name = "herg_tn_kfold6"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
-    args.max_steps = 1000
-    args.seed = 0
+    args.max_steps = 50
+    args.seed = 99
     args.patience = 100
 
     # data module args
-    args.batch_size = 512
+    args.batch_size = 128
+    args.split_type = "random_kfold"
+    args.split_size = (5, 0, 1)
+    # args.split_type = "random"
+    # args.split_size = (0.6, 0.2, 0.2)
     args.split_seed = 0
+
+    args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
 
     args.featurizer_name = "combined"
     args.featurizer_kwargs = {
@@ -133,7 +181,8 @@ def manual_args(args: Namespace) -> Namespace:
         "use_features": True,
     }
 
-    args.num_workers = 4
+    args.num_workers = 8#multiprocessing.cpu_count()
+    # args.num_workers = 0
     args.cache_dir = "../../../" + "data/herg/"
 
     # model args
@@ -141,37 +190,28 @@ def manual_args(args: Namespace) -> Namespace:
     args.feature_size = args.decision_size * 2
     args.nr_layers = 2
     args.nr_shared_layers = 2
-    args.nr_steps = 6
+    args.nr_steps = 5
     args.gamma = 1.5
 
-    args.relaxation_type = "gamma_fixed"
-    # args.alpha = 2.0
-    # args.attentive_type = "sparsemax"
-
-    # args.slope = 3.0
-    # args.slope_type = "slope_fixed"
-
-    # args.lambda_sparse = 1e-6
-    # args.lambda_sparse = 0.1
-    args.lambda_sparse = 0.001
+    args.lambda_sparse = 1e-6
 
     # args.virtual_batch_size = 32  # -1 do not use any batch normalization
     args.virtual_batch_size = -1  # -1 do not use any batch normalization
-    #args.virtual_batch_size = 64
-    #args.momentum = 0.1
+    # args.virtual_batch_size = 64
+    # args.momentum = 0.1
 
     # args.normalize_input = True
 
     args.normalize_input = False
     # args.virtual_batch_size = 256  # -1 do not use any batch normalization
 
-    args.lr = 0.001
-    #args.optimizer = "adam"
+    args.lr = 0.0004
+    # args.optimizer = "adam"
     # args.scheduler = "exponential_decay"
     # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
 
-    args.optimizer="adamw"
-    args.optimizer_params={"weight_decay": 0.0001}
+    args.optimizer = "adamw"
+    args.optimizer_params = {"weight_decay": 0.0001}
     args.scheduler = "linear_with_warmup"
     # args.scheduler_params = {"warmup_steps": 10}
     args.scheduler_params = {"warmup_steps": 0.01}
@@ -179,6 +219,8 @@ def manual_args(args: Namespace) -> Namespace:
     args.log_sparsity = True
     # args.log_sparsity = "verbose"
     # args.log_parameters = False
+    args.attribution = ["test"]
+    # args.attribution = None
 
     return args
 
@@ -198,6 +240,16 @@ def run_cli() -> Namespace:
 if __name__ == "__main__":
     args = run_cli()
 
-    results_val, results_test, *_ = train_tn(args)
+    results = {}
+    if "kfold" in args.split_type:
+        kfold = Kfold(
+            function=train_tn_kfold,
+            args=args,
+            **vars(args)
+        )
+        results = kfold.train()
 
-    print(results_val)
+    else:
+        results, *_ = train_tn(args)
+
+    print(results)
