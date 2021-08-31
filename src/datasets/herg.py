@@ -15,6 +15,7 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import TensorDataset, DataLoader
 
 from datasets.featurizer import ECFPFeaturizer, MACCSFeaturizer, ToxFeaturizer
+from datasets.utils import split_kfold
 
 
 class Hergophores:
@@ -22,7 +23,7 @@ class Hergophores:
         "substructures_active_binding_1um": [
             "c1ccccc1CCNC",
             "c1ccccc1CN2CCCCC2",
-            "c1ccccc1C(F)(F)F", # na
+            "c1ccccc1C(F)(F)F",  # na
         ],
         "substructures_active_binding_10um": [
             "CCOc1ccccc1",
@@ -41,14 +42,14 @@ class Hergophores:
             "n1ccccc1",
             "COc1ccccc1",
             "n1ccccc1C",
-            "NCCc1ccccc1", # na
-            "c1ccccc1C(F)(F)F", # na
+            "NCCc1ccccc1",  # na
+            "c1ccccc1C(F)(F)F",  # na
         ],
         "substructures_inactive_binding_10um": [
             "n1ccccc1",
             "n1ccccc1C",
             "c1cc(C)ccc1C",
-            "NCCc1ccccc1", # na
+            "NCCc1ccccc1",  # na
             "CCNCc1ccccc1",
         ],
         "substructures_inactive_functional_1um": [
@@ -60,8 +61,6 @@ class Hergophores:
             "CCc1ccccc1",
         ],
     }
-
-
 
     @staticmethod
     def get(by_groups: Optional[Union[str, List[str]]] = None) -> List[str]:
@@ -87,7 +86,7 @@ class HERGClassifierDataModule(pl.LightningDataModule):
                  use_cache: bool = True,
                  use_labels: List[str] = None,
                  split_type: str = "random",
-                 split_size: Tuple[float, float, float] = (0.6, 0.2, 0.2),
+                 split_size: Union[Tuple[float, float, float], Tuple[int, int, int]] = (0.6, 0.2, 0.2),
                  split_seed: int = 5180,
                  featurizer_name: str = "combined",
                  featurizer_kwargs: Optional[dict] = None,
@@ -97,14 +96,16 @@ class HERGClassifierDataModule(pl.LightningDataModule):
 
         Args:
             batch_size: training batch size
-            num_workers: num workers used for data loaders
+            num_workers: num workers used for data loaders and featurizer
             cache_dir: cache directory
             use_cache: whether to use cache or not
-            use_labels: which labels to use provide as targets from the herg dataset
-            split_type: random or stratified
-            split_size: size of split as Tuple(train size, val size, test size) - must sum to 1
+            use_labels: which labels to use provide as targets from the herg dataset - if none is defined uses all labels (multi target)
+            split_type: random or kfold
+            split_size:
+                If split type is random: Size of splits as tuple of floats (train size, val size, test size) - must sum to 1
+                If split type is kfold: Tuple of ints (nr of folds, val fold, test fold)
             split_seed: seed for splitting
-            featurizer_name: at the moment only combined is used meaning ecfp + maccs + tox will be concatenated.
+            featurizer_name: at the moment only combined is used - meaning ecfp + maccs + tox will be concatenated.
             featurizer_kwargs: featurizer kwargs for ecfp featurizer (radius, folding, return counts)
             standardize: default true - standardize features
         """
@@ -124,7 +125,7 @@ class HERGClassifierDataModule(pl.LightningDataModule):
         self.standardize = standardize
 
         if featurizer_name == "combined":
-            self.featurizer = [ECFPFeaturizer(**featurizer_kwargs), MACCSFeaturizer(n_jobs=num_workers), ToxFeaturizer(n_jobs=num_workers)]
+            self.featurizer = [ECFPFeaturizer(n_jobs=num_workers, **featurizer_kwargs), MACCSFeaturizer(n_jobs=num_workers), ToxFeaturizer(n_jobs=num_workers)]
         else:
             raise ValueError(f"featurizer {featurizer_name} is unknown")
 
@@ -186,8 +187,13 @@ class HERGClassifierDataModule(pl.LightningDataModule):
         self.input_size = X.shape[-1]
 
         # default split and create dataset
-        (X_train, y_train), (X_val, y_val), (X_test, y_test) = self.split(X, y)
         self.train_indices, self.val_indices, self.test_indices = self.split_indices(len(X))
+        X_train = X[self.train_indices, ...]
+        y_train = y[self.train_indices, ...]
+        X_val = X[self.val_indices, ...]
+        y_val = y[self.val_indices, ...]
+        X_test = X[self.test_indices, ...] if self.test_indices is not None else None
+        y_test = y[self.test_indices, ...] if self.test_indices is not None else None
 
         X_train = X_train.astype(np.float32)
         X_val = X_val.astype(np.float32)
@@ -222,37 +228,25 @@ class HERGClassifierDataModule(pl.LightningDataModule):
     def determine_class_weights(self):
         pass
 
-    def split(self, X, y):
-        if self.split_type != "random":
-            raise ValueError(f"split type {self.split_type} not supported yet")
-
-        test_size = sum(self.split_size[1:])
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=test_size, random_state=self.split_seed)
-
-        if self.split_size[-1] > 0 and len(self.split_size) == 3:
-            test_size = self.split_size[-1] / test_size
-            X_val, X_test, y_val, y_test = train_test_split(X_val, y_val, test_size=test_size, random_state=self.split_seed)
-        else:
-            X_test, y_test = None, None
-
-        return (X_train, y_train), (X_val, y_val), (X_test, y_test)
-
     def split_indices(self, nr_samples: int) -> Tuple[np.ndarray, np.ndarray, Union[np.ndarray, None]]:
-        if self.split_type != "random":
-            raise ValueError(f"split type {self.split_type} not supported yet")
 
-        indices = np.arange(nr_samples)
+        if self.split_type == "random":
+            indices = np.arange(nr_samples)
 
-        test_size = sum(self.split_size[1:])
-        train_indices, val_indices = train_test_split(indices, test_size=test_size, random_state=self.split_seed)
+            test_size = sum(self.split_size[1:])
+            train_indices, val_indices = train_test_split(indices, test_size=test_size, random_state=self.split_seed)
 
-        if self.split_size[-1] > 0 and len(self.split_size) == 3:
-            test_size = self.split_size[-1] / test_size
-            val_indices, test_indices = train_test_split(val_indices, test_size=test_size, random_state=self.split_seed)
+            if self.split_size[-1] > 0 and len(self.split_size) == 3:
+                test_size = self.split_size[-1] / test_size
+                val_indices, test_indices = train_test_split(val_indices, test_size=test_size, random_state=self.split_seed)
+            else:
+                test_indices = None
+
+            return train_indices, val_indices, test_indices
+        if self.split_type == "random_kfold":
+            return split_kfold(nr_samples, self.split_size, seed=self.split_seed)
         else:
-            test_indices = None
-
-        return train_indices, val_indices, test_indices
+            raise ValueError(f"split type {self.split_type} not supported yet")
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, pin_memory=True)

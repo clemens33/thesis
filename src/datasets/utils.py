@@ -1,5 +1,5 @@
 import math
-from typing import Tuple
+from typing import Tuple, Union
 
 import numpy as np
 from numpy.random import default_rng
@@ -97,3 +97,29 @@ def add_noise(input: np.ndarray, type: str = "standard_normal", seed: int = 0) -
         noise = np.zeros_like(input)
 
     return input + noise
+
+
+def split_kfold(nr_samples: int, split_size: Tuple[int, ...] = (5, 0, 1), seed: int = 0) -> Tuple[
+    np.ndarray, np.ndarray, Union[np.ndarray, None]]:
+    rng = np.random.default_rng(seed)
+
+    if len(split_size) < 2:
+        raise ValueError(f"split size {split_size} must contain at least nr of folds and the validation fold to use")
+    if not all([f < split_size[0] for f in split_size[1:]]):
+        raise ValueError(f"defined validation or test folds to use must be zero indexed and not exceed the total nr of folds")
+
+    indices = np.arange(nr_samples)
+    rng.shuffle(indices)
+
+    nr_folds = split_size[0]
+    folds = np.array_split(indices, nr_folds)
+
+    val_fold_nr = split_size[1]
+    test_fold_nr = split_size[2] if len(split_size) > 2 else -1
+    train_fold_nrs = [f for f in range(nr_folds) if f not in [val_fold_nr, test_fold_nr]]
+
+    train_indices = np.concatenate([folds[f] for f in train_fold_nrs])
+    val_indices = folds[val_fold_nr]
+    test_indices = folds[test_fold_nr] if test_fold_nr != -1 else None
+
+    return train_indices, val_indices, test_indices
