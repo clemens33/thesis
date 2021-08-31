@@ -1,6 +1,6 @@
 import tempfile
 import uuid
-from typing import Union, List, Optional
+from typing import Union, List, Optional, Dict
 
 import numpy as np
 import torch
@@ -321,15 +321,10 @@ def plot_rankings(mask: torch.Tensor,
     return path
 
 
-def replace_key_name(d: dict, to_replace: str, replace_with: str):
+def replace_key_name(d: dict, to_replace: str, replace_with: str) -> Dict:
     return {
         k.replace(to_replace, replace_with) if isinstance(k, str) else k: v for k, v in d.items()
     }
-
-
-
-
-
 
 # TODO - move to pytest
 # if __name__ == "__main__":

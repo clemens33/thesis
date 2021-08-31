@@ -13,7 +13,7 @@ def train_evaluate(args: Namespace, **kwargs):
     # args.scheduler_params["decay_step"] = args.decay_step
     # args.scheduler_params["decay_rate"] = args.decay_rate
 
-    results_test, results_val_best, results_val_last, *_ = train_tn(args, **kwargs)
+    results_test, results_val_best, results_val_last, results_attribution_summary, *_ = train_tn(args, **kwargs)
 
     metric = results_val_best[args.objective_name]
     # metric = results_val_last[args.objective_name]
@@ -53,15 +53,16 @@ def manual_args(args: Namespace) -> Namespace:
     ]
 
     # trainer/logging args
-    args.experiment_name = "herg_tn_opt1"
+    args.experiment_name = "herg_tn_active_g10_opt2"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
-    args.seed = 0
+    args.seed = 99
     args.patience = 50
 
     # data module args
     args.batch_size = 64
     args.split_seed = 0
+    args.use_labels = ["active_g10"]
 
     args.featurizer_name = "combined" # ecfp + macc + tox
     args.featurizer_kwargs = {
@@ -72,7 +73,7 @@ def manual_args(args: Namespace) -> Namespace:
         "use_features": True,
     }
 
-    args.num_workers = 8
+    args.num_workers = 16
     args.cache_dir = "../../../" + "data/herg/"
 
     # model args
@@ -115,6 +116,7 @@ def manual_args(args: Namespace) -> Namespace:
     args.log_sparsity = True
     # args.log_sparsity = "verbose"
     # args.log_parameters = False
+    args.attribution = ["test"]
 
     return args
 
