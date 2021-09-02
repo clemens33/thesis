@@ -19,7 +19,7 @@ from datasets.utils import split_kfold
 
 
 class Hergophores:
-    grouped = {
+    GROUPED = {
         "substructures_active_binding_1um": [
             "c1ccccc1CCNC",
             "c1ccccc1CN2CCCCC2",
@@ -62,17 +62,43 @@ class Hergophores:
         ],
     }
 
+    #
+    ACTIVES_UNIQUE = [
+        "CCOc1ccccc1",
+        "c1ccccc1CNCC",
+        "c1ccccc1CCNC",
+        "c1ccccc1CN2CCCCC2",
+        "c1ccccc1Cc1ccccc1"
+    ]
+
+    INACTIVES_UNIQUE = [
+        "n1ccccc1",
+        "COc1ccccc1",
+        "n1ccccc1C",
+        "c1cc(C)ccc1C",
+        "CCNCc1ccccc1",
+    ]
+
+
     @staticmethod
-    def get(by_groups: Optional[Union[str, List[str]]] = None) -> List[str]:
-        by_groups = [*Hergophores.grouped] if by_groups is None else by_groups
+    def get(by_smiles: Optional[List[str]] = None, by_groups: Optional[Union[str, List[str]]] = None, filter_by_group_term: str = "") -> \
+    Tuple[List[str], List[int]]:
+
+        by_groups = [*Hergophores.GROUPED] if by_groups is None else by_groups
         by_groups = [by_groups] if not isinstance(by_groups, list) else by_groups
 
-        hergophores = []
-        for k, v in Hergophores.grouped.items():
-            if k in by_groups:
-                hergophores += v
+        hergophores, activities = [], []
+        for k, v in Hergophores.GROUPED.items():
+            if k in by_groups and filter_by_group_term in k:
+                smiles = [h for h in v if h in by_smiles] if by_smiles is not None else v
 
-        return list(set(hergophores))
+                hergophores += smiles
+                activities += [1 if "_active_" in k else 0] * len(v)
+
+        unique_indices = [hergophores.index(h) for h in set(hergophores)]
+        hergophores, activities = zip(*[(hergophores[i], activities[i]) for i in unique_indices])
+
+        return hergophores, activities
 
 
 class HERGClassifierDataModule(pl.LightningDataModule):
@@ -125,7 +151,8 @@ class HERGClassifierDataModule(pl.LightningDataModule):
         self.standardize = standardize
 
         if featurizer_name == "combined":
-            self.featurizer = [ECFPFeaturizer(n_jobs=num_workers, **featurizer_kwargs), MACCSFeaturizer(n_jobs=num_workers), ToxFeaturizer(n_jobs=num_workers)]
+            self.featurizer = [ECFPFeaturizer(n_jobs=num_workers, **featurizer_kwargs), MACCSFeaturizer(n_jobs=num_workers),
+                               ToxFeaturizer(n_jobs=num_workers)]
         else:
             raise ValueError(f"featurizer {featurizer_name} is unknown")
 
