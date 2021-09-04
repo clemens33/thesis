@@ -1,4 +1,7 @@
 import math
+import multiprocessing
+import sys
+from operator import length_hint
 from typing import Tuple, Union
 
 import numpy as np
@@ -101,6 +104,23 @@ def add_noise(input: np.ndarray, type: str = "standard_normal", seed: int = 0) -
 
 def split_kfold(nr_samples: int, split_size: Tuple[int, ...] = (5, 0, 1), seed: int = 0) -> Tuple[
     np.ndarray, np.ndarray, Union[np.ndarray, None]]:
+    """
+    Split based on the nr of provided samples and returns defined validation fold, test fold and the rest as train folds.
+    Does only support single folds for validation and test at the moment
+
+    Args:
+        nr_samples (): Number of samples which should be splitted
+        split_size (): Split size as a tuple of ints
+            - First entry refers to the number of total folds
+            - Second entry refers to the 0 based fold index to use as validation fold
+            - (Optional) Third entry refers to the test fold
+        seed (): Random seed used to produce splits
+
+    Returns:
+        Tuple of numpy arrays containing the as first entry the training indices, second entry the validation entry and if available as
+        third entry the test indices or None
+
+    """
     rng = np.random.default_rng(seed)
 
     if len(split_size) < 2:
@@ -123,3 +143,52 @@ def split_kfold(nr_samples: int, split_size: Tuple[int, ...] = (5, 0, 1), seed: 
     test_indices = folds[test_fold_nr] if test_fold_nr != -1 else None
 
     return train_indices, val_indices, test_indices
+
+
+def process_map(fn, *iterables, **tqdm_kwargs):
+    """adapted/based on https://tqdm.github.io/docs/contrib.concurrent/ to support mp spawn context"""
+
+    from concurrent.futures import ProcessPoolExecutor
+    from tqdm import TqdmWarning
+
+    if iterables and "chunksize" not in tqdm_kwargs:
+        # default `chunksize=1` has poor performance for large iterables
+        # (most time spent dispatching items to workers).
+        longest_iterable_len = max(map(length_hint, iterables))
+        if longest_iterable_len > 1000:
+            from warnings import warn
+            warn("Iterable length %d > 1000 but `chunksize` is not set."
+                 " This may seriously degrade multiprocess performance."
+                 " Set `chunksize=1` or more." % longest_iterable_len,
+                 TqdmWarning, stacklevel=2)
+    if "lock_name" not in tqdm_kwargs:
+        tqdm_kwargs = tqdm_kwargs.copy()
+        tqdm_kwargs["lock_name"] = "mp_lock"
+    return _executor_map(ProcessPoolExecutor, fn, *iterables, **tqdm_kwargs)
+
+
+def _executor_map(PoolExecutor, fn, *iterables, **tqdm_kwargs):
+    """adapted/based on https://tqdm.github.io/docs/contrib.concurrent/ to support mp context object"""
+
+    from tqdm.contrib.concurrent import ensure_lock
+    from tqdm.auto import tqdm as tqdm_auto
+
+    kwargs = tqdm_kwargs.copy()
+    if "total" not in kwargs:
+        kwargs["total"] = len(iterables[0])
+    tqdm_class = kwargs.pop("tqdm_class", tqdm_auto)
+    max_workers = kwargs.pop("max_workers", min(32, multiprocessing.cpu_count() + 4))
+    chunksize = kwargs.pop("chunksize", 1)
+    lock_name = kwargs.pop("lock_name", "")
+    mp_context = kwargs.pop("mp_context", None)
+    with ensure_lock(tqdm_class, lock_name=lock_name) as lk:
+        pool_kwargs = {'max_workers': max_workers, "mp_context": mp_context}
+        sys_version = sys.version_info[:2]
+        if sys_version >= (3, 7):
+            # share lock in case workers are already using `tqdm`
+            pool_kwargs.update(initializer=tqdm_class.set_lock, initargs=(lk,))
+        map_args = {}
+        if not (3, 0) < sys_version < (3, 5):
+            map_args.update(chunksize=chunksize)
+        with PoolExecutor(**pool_kwargs) as ex:
+            return list(tqdm_class(ex.map(fn, *iterables, **map_args), **kwargs))

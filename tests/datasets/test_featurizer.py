@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 
@@ -35,7 +36,6 @@ class TestECFP_Featurizer():
         """basic ecfp featurizer tests"""
 
         from datasets.featurizer import ECFPFeaturizer
-        import numpy as np
 
         featurizer = ECFPFeaturizer(radius=radius, fold=fold, use_features=use_features, use_chirality=use_chirality,
                                     return_count=return_count, n_jobs=n_jobs)
@@ -53,7 +53,6 @@ class TestECFP_Featurizer():
             # if we dont return count (bit vector) all must be smaller-equal 1
             assert np.all((desc <= 1))
 
-
     @pytest.mark.parametrize("radius, fold, use_chirality, use_features",
                              [
                                  (1, 32, False, False),
@@ -68,8 +67,6 @@ class TestECFP_Featurizer():
         from datasets.featurizer import ECFPFeaturizer
         from rdkit import Chem
         from rdkit.Chem import AllChem
-
-        import numpy as np
 
         desc_expected = []
         for smile in sample_smiles:
@@ -134,7 +131,6 @@ class TestMACCSFeaturizer():
         """basic maccs featurizer tests"""
 
         from datasets.featurizer import MACCSFeaturizer
-        import numpy as np
 
         featurizer = MACCSFeaturizer(n_jobs) if n_jobs else MACCSFeaturizer()
         features = featurizer(sample_smiles)
@@ -163,15 +159,14 @@ class TestToxFeaturizer:
 
     @pytest.mark.parametrize("n_jobs",
                              [
-                                 (1),
                                  (4),
+                                 (1),
                                  (None),
                              ])
     def test_atomic_attribution(self, sample_smiles, n_jobs):
         """basic maccs attribution tests"""
 
         from datasets.featurizer import ToxFeaturizer
-        import numpy as np
 
         featurizer = ToxFeaturizer(n_jobs) if n_jobs else ToxFeaturizer()
         features = featurizer(sample_smiles)
@@ -183,23 +178,39 @@ class TestToxFeaturizer:
         assert len(sample_smiles) == len(atomic_attribution)
 
 
-@pytest.mark.parametrize("reference_smiles",
+@pytest.mark.parametrize("smiles, reference_smiles, provide_labels, provide_preds, indefinite_labels, seed",
                          [
-                             (["n1ccccc1", "n1ccccc1C", "c1cc(C)ccc1C"]),
-                             (["Cc1ccccc1"]),
+                             (["CNCc1ccc(cc1Oc1ccc(cc1)Cl)C(F)(F)F"], [("n1ccccc1", 1)], True, True, 0, 1),
+                             (None, [("n1ccccc1", 0), ("c1cc(C)ccc1C", 1)], True, True, 3, 1),
+                             (None, ["n1ccccc1", "n1ccccc1C", "c1cc(C)ccc1C"], True, True, 0, 1),
+                             (None, ["n1ccccc1", "n1ccccc1C", "c1cc(C)ccc1C"], False, True, 3, 1),
+                             (None, ["n1ccccc1", "n1ccccc1C", "c1cc(C)ccc1C"], True, False, 3, 1),
+                             (None, ["n1ccccc1", "n1ccccc1C", "c1cc(C)ccc1C"], False, False, 3, 1),
+                             (None, ["n1ccccc1", "c1cc(C)ccc1C"], False, False, 3, 1),
                          ])
-def test_match(sample_smiles, reference_smiles):
-    from datasets.featurizer import match
+def test_match(sample_smiles, smiles, reference_smiles, provide_labels, provide_preds, indefinite_labels, seed):
+    from datasets.featurizer import calculate_ranking_scores
     from rdkit import Chem
-    import numpy as np
+
+    rng = np.random.default_rng(seed)
+
+    smiles = sample_smiles if smiles is None else smiles
 
     dummy_attribution = []
-    for smile in sample_smiles:
+    for smile in smiles:
         mol = Chem.MolFromSmiles(smile)
 
-        dummy_attribution.append(np.random.rand(mol.GetNumAtoms()))
+        dummy_attribution.append(rng.random(mol.GetNumAtoms()))
 
-    results, df = match(sample_smiles, reference_smiles, dummy_attribution)
+    # generate dummy labels, preds
+    labels = rng.integers(0, 2, size=len(smiles)).astype(float) if provide_labels else None
+    preds = rng.integers(0, 2, size=len(smiles)).astype(float) if provide_preds else None
 
-    assert len(df) == len(sample_smiles)
-    assert len(results) - 1 == len(reference_smiles)
+    if indefinite_labels > 0 and provide_labels:
+        nan_indices = rng.integers(0, len(smiles), indefinite_labels)
+        labels[nan_indices] = float("nan")
+
+    result, reference_results, df = calculate_ranking_scores(smiles, reference_smiles, dummy_attribution, labels=labels, preds=preds)
+
+    assert len(df) == len(smiles)
+    assert len(reference_results) == len(reference_smiles)

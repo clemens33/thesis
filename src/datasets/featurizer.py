@@ -6,12 +6,14 @@ from typing import Optional, List, Tuple, Dict, Union
 
 import numpy as np
 import pandas as pd
+from joblib._multiprocessing_helpers import mp
 from rdkit import Chem
 from rdkit.Chem import AllChem, Mol, MACCSkeys
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.metrics import roc_auc_score
 from tqdm import tqdm
-from tqdm.contrib.concurrent import process_map
+
+from datasets.utils import process_map
 
 
 def _init_molecule(molecule: Union[str, Mol, bytes]) -> Mol:
@@ -106,10 +108,14 @@ class ECFPFeaturizer():
 
         if self.n_jobs > 1:
             fingerprints, bit_infos, mols = zip(
-                *process_map(self._ecfp, smiles,
-                             # chunksize=(len(smiles) // self.n_jobs) + 1,
-                             chunksize=1,
-                             max_workers=self.n_jobs, desc="_ecfp"))
+                *process_map(
+                    self._ecfp, smiles,
+                    chunksize=(len(smiles) // self.n_jobs) + 1,
+                    # chunksize=1,
+                    max_workers=self.n_jobs, desc="_ecfp",
+                    mp_context=mp.get_context("spawn")
+                )
+            )
         else:
             fingerprints, bit_infos, mols = zip(*list(map(self._ecfp, tqdm(smiles, total=len(smiles), desc="_ecfp"))))
 
@@ -274,10 +280,11 @@ class MACCSFeaturizer():
         _mols = [m.ToBinary() for m in mols if m]
         if self.n_jobs > 1:
             maccs = process_map(self._macc, _mols,
-                                # chunksize=(len(smiles) // self.n_jobs) + 1,
-                                chunksize=1,
+                                chunksize=(len(smiles) // self.n_jobs) + 1,
+                                # chunksize=1,
                                 max_workers=self.n_jobs,
-                                desc="_maccs")
+                                desc="_maccs",
+                                mp_context=mp.get_context("spawn"))
         else:
             maccs = list(map(self._macc, _mols))
 
@@ -434,10 +441,11 @@ class MACCSFeaturizer():
 
         if self.n_jobs > 1:
             atomic_attributions = process_map(self._atomic_attribution, _mols, feature_attributions,
-                                              # chunksize=(len(smiles) // self.n_jobs) + 1,
-                                              chunksize=1,
+                                              chunksize=(len(smiles) // self.n_jobs) + 1,
+                                              # chunksize=1,
                                               max_workers=self.n_jobs,
-                                              desc="_maccs_atomic_attributions")
+                                              desc="_maccs_atomic_attributions",
+                                              mp_context=mp.get_context("spawn"))
         else:
             atomic_attributions = list(
                 map(self._atomic_attribution, tqdm(_mols, total=len(smiles), desc="_maccs_atomic_attributions"), feature_attributions))
@@ -622,10 +630,11 @@ class ToxFeaturizer():
         _mols = [m.ToBinary() for m in mols if m]
         if self.n_jobs > 1:
             toxs = process_map(self._tox, _mols,
-                               # chunksize=(len(smiles) // self.n_jobs) + 1,
-                               chunksize=1,
+                               chunksize=(len(smiles) // self.n_jobs) + 1,
+                               # chunksize=1,
                                max_workers=self.n_jobs,
-                               desc="_toxs")
+                               desc="_toxs",
+                               mp_context=mp.get_context("spawn"))
         else:
             toxs = list(map(self._tox, _mols))
 
@@ -691,7 +700,8 @@ class ToxFeaturizer():
                                               chunksize=(len(smiles) // self.n_jobs) + 1,
                                               # chunksize=1,
                                               max_workers=self.n_jobs,
-                                              desc="_tox_atomic_attributions")
+                                              desc="_tox_atomic_attributions",
+                                              mp_context=mp.get_context("spawn"))
         else:
             atomic_attributions = list(
                 map(self._atomic_attribution, tqdm(_mols, total=len(smiles), desc="_tox_atomic_attributions"), feature_attributions))
@@ -699,16 +709,64 @@ class ToxFeaturizer():
         return atomic_attributions
 
 
-def match(smiles: List[str], reference_smiles: List[str], atomic_attributions: List[np.ndarray]) -> Tuple[List[dict], pd.DataFrame]:
-    df = pd.DataFrame()
-    df["smiles"] = smiles
+def calculate_ranking_scores(smiles: List[str],
+                             references: Union[List[str], List[Tuple[str, int]]],
+                             atomic_attributions: List[np.ndarray],
+                             labels: Optional[np.ndarray] = None,
+                             preds: Optional[np.ndarray] = None,
+                             ) -> Tuple[Dict, List[Dict], pd.DataFrame]:
+    """
+    Function calculates the score to rank atoms of reference smiles/atomic substructures according to the provided atomic attribution/weights
 
-    mean_aurocs = []
-    results = []
-    for reference_smile in tqdm(reference_smiles):
+    Args:
+        smiles (): List of smile strings
+        references (): List of tuples of provided reference smiles and if they are supposed to be active or not
+            Scores are calculated per reference smile
+        atomic_attributions (): List of atomic attributions/weights
+        labels (): Optional provide binary true labels
+        preds (): Optional provide binary predictions
+
+    Returns:
+        Tuple containing
+        - Dictionary of mean calculated scores for all provided reference smiles
+        - List of dictionaries per reference score with mean scores per reference smile
+        - Dataframe containing table with full details per smile and per reference smile with all matches, scores, etc.
+
+    """
+
+    assert len(smiles) == len(
+        atomic_attributions), f"length of provided smiles {len(smiles)} must match length of provided attributions {len(atomic_attributions)}"
+
+    if labels is not None:
+        assert labels.ndim == 1, f"nr of dimensions of provided labels must be 1 but is {labels.ndim}"
+        assert len(labels) == len(smiles), f"nr of labels {len(labels)} must match number of smiles {len(smiles)}"
+    if preds is not None:
+        assert preds.ndim == 1, f"nr of dimensions of provided predictions must be 1  but is {preds.ndim}"
+        assert len(preds) == len(smiles), f"nr of predictions {len(preds)} must match number of smiles {len(smiles)}"
+
+    df = pd.DataFrame()
+    df["smile"] = smiles
+
+    if labels is not None:
+        df["label"] = labels
+
+    if preds is not None:
+        df["pred"] = preds
+
+    # TODO rewrite loops for performance + add multiprocessing
+    reference_results = []
+    for reference in tqdm(references):
+        if isinstance(reference, tuple):
+            reference_smile, reference_active = reference
+            reference_active = "active" if reference_active == 1 else "inactive"
+        else:
+            reference_smile = reference
+            reference_active = None
+
         reference_mol = Chem.MolFromSmiles(reference_smile)
 
-        matches, attributions, aurocs = [], [], []
+        atom_matches, reference_attributions = [], []
+        scores = []
         for i, smile in enumerate(smiles):
             mol = Chem.MolFromSmiles(smile)
             num_atoms = mol.GetNumAtoms()
@@ -718,38 +776,104 @@ def match(smiles: List[str], reference_smiles: List[str], atomic_attributions: L
             if match:
                 reference_atoms = [1 if i in match else 0 for i in range(num_atoms)]
 
-                if not np.isnan(atomic_attributions[i]).any():
-                    auroc = roc_auc_score(reference_atoms, atomic_attributions[i])
-                    aurocs.append(auroc)
+                if not np.isnan(atomic_attributions[i]).any():  # failsafe check
+
+                    # score to rank atoms according to reference atom using the corresponding attributions
+                    score = roc_auc_score(reference_atoms, atomic_attributions[i])
+
+                    scores.append(score)
                 else:
-                    aurocs.append(float("nan"))
+                    warnings.warn(f"encountered nan atomic attribution for smile {smile}")
 
-                matches.append(str(reference_atoms))
+                    scores.append(float("nan"))
+
+                atom_matches.append(str(reference_atoms))
             else:
-                aurocs.append(float("nan"))
-                matches.append("n/a")
+                scores.append(float("nan"))
+                atom_matches.append("n/a")
 
-            attributions.append(str(atomic_attributions[i]))
+            reference_attributions.append(str(atomic_attributions[i]))
 
-        mean_aurocs.append(np.nanmean(aurocs))
+        scores = np.array(scores)
+        matches = np.array([0 if m == "n/a" else 1 for m in atom_matches])
 
-        results.append({
-            reference_smile: {
-                "count_match": int(sum(~np.isnan(aurocs))),
-                "mean_auroc": float(np.nanmean(aurocs)),
-                "max_auroc": float(np.nanmax(aurocs)),
-                "min_auroc": float(np.nanmin(aurocs)),
-            }
+        reference_result = {
+            "avg_score": np.nanmean(scores).item(),
+
+            "N_matches": matches.sum().item(),
+        }
+
+        if labels is not None:
+            # indices based on the label active/inactive
+            label_active_indices = (labels == 1).nonzero()
+            label_inactive_indices = (labels == 0).nonzero()
+            label_indefinite_indices = np.flatnonzero(np.isnan(labels))
+
+            reference_result.update({
+                "avg_score_label_active": np.nanmean(scores[label_active_indices]).item(),
+                "avg_score_label_inactive": np.nanmean(scores[label_inactive_indices]).item(),
+                "avg_score_label_indefinite": np.nanmean(scores[label_indefinite_indices]).item() if len(
+                    label_indefinite_indices) > 0 else .0,
+
+                "N_matches_label_active": matches[label_active_indices].sum().item(),
+                "N_matches_label_inactive": matches[label_inactive_indices].sum().item(),
+                "N_matches_label_indefinite": matches[label_indefinite_indices].sum().item() if len(
+                    label_indefinite_indices) > 0 else .0,
+            })
+
+        if preds is not None:
+            # indices based on the predictions active/inactive
+            pred_active_indices = (preds == 1).nonzero()
+            pred_inactive_indices = (preds == 0).nonzero()
+
+            reference_result.update({
+                "avg_score_pred_active": np.nanmean(scores[pred_active_indices]).item(),
+                "avg_score_pred_inactive": np.nanmean(scores[pred_inactive_indices]).item(),
+
+                "N_matches_pred_active": matches[pred_active_indices].sum().item(),
+                "N_matches_pred_inactive": matches[pred_inactive_indices].sum().item(),
+            })
+
+        if preds is not None and labels is not None:
+            # indices where labels and predictions match
+            true_indices = np.equal(labels, preds).nonzero()
+            true_active_indices = (preds[true_indices] == 1).nonzero()
+            true_inactive_indices = (preds[true_indices] == 0).nonzero()
+
+            reference_result.update({
+                "avg_score_true": np.nanmean(scores[true_indices]).item(),
+                "avg_score_true_active": np.nanmean(scores[true_active_indices]).item(),
+                "avg_score_true_inactive": np.nanmean(scores[true_inactive_indices]).item(),
+
+                "N_matches_true": matches[true_indices].sum().item(),
+                "N_matches_true_active": matches[true_active_indices].sum().item(),
+                "N_matches_true_inactive": matches[true_inactive_indices].sum().item(),
+            })
+
+        ref_key = reference_smile
+        ref_key += " - " + reference_active if reference_active else ""
+
+        reference_results.append({
+            ref_key: reference_result
         })
 
-        df[reference_smile + " | match"] = matches
-        df[reference_smile + " | atomic_attribution"] = attributions
-        df[reference_smile + " | auroc"] = aurocs
+        df[ref_key + " / match"] = atom_matches
+        df[ref_key + " / atomic_attribution"] = reference_attributions
+        df[ref_key + " / score"] = scores
 
-    results.append({
-        "attribution_summary": {
-            "mean_aurocs": np.array(mean_aurocs).mean(),
-        }
-    })
+    # calculate summary result (mean of individual per reference smile results)
+    result = {}
+    for r in reference_results:
+        reference_result = next(iter(r.items()))[1]
 
-    return results, df
+        for k, v in reference_result.items():
+            key = "mean/" + k
+            values = result.get(key, [])
+            values.append(v)
+
+            result[key] = values
+
+    for k, v in result.items():
+        result[k] = np.nanmean(v).item()
+
+    return result, reference_results, df
