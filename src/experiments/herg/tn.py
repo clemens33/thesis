@@ -11,7 +11,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, EarlyStopping, Mode
 from pytorch_lightning.loggers import MLFlowLogger
 
 from datasets import HERGClassifierDataModule
-from experiments.herg.attribution import attribution, log_attribution
+from experiments.herg.attribution import Attributor
 from experiments.kfold import Kfold
 from tabnet_lightning import TabNetClassifier, TabNetTrainer
 
@@ -132,10 +132,18 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, TabNetC
     results_test = trainer.test(test_dataloaders=dm.test_dataloader())
 
     results_attribution = {}
-    if args.attribution:
+    if args.attribution_kwargs is not None:
         model = TabNetClassifier.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
 
-        results_attribution = log_attribution(model, dm, mlf_logger, type=args.attribution)
+        attributor = Attributor(
+            model=model,
+            dm=dm,
+            logger=mlf_logger,
+
+            **args.attribution_kwargs
+        )
+
+        results_attribution = attributor.attribute()
 
     return results_test[0], results_val_best, results_val_last, results_attribution, classifier, trainer, dm
 
@@ -149,16 +157,31 @@ def manual_args(args: Namespace) -> Namespace:
         "val/Accuracy",
         "test/AUROC",
         "test/Accuracy",
-        "test/smile-mean_aurocs",
     ]
-    args.track_metrics += ["test/smile" + str(i) + "-mean_auroc" for i in range(20)]
+    args.track_metrics += [
+        "test/mean/avg_score_true_active",
+        "test/mean/avg_score_true_inactive",
+    ]
+    args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
+    args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
+
+    # attribution options
+    args.attribution_kwargs = {
+        "types": ["test"],
+        "track_metrics": args.track_metrics,
+        # "label": "active_g100",
+        # "label_idx": 5,
+        "label": "active_g10",
+        "label_idx": 0,
+        # "nr_samples": 100,
+    }
 
     # trainer/logging args
     args.objective_name = "val/AUROC"
     args.minimize = False
-    args.experiment_name = "herg_tn_kfold6"
+    args.experiment_name = "herg_tn_kfold8"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
-    args.max_steps = 50
+    args.max_steps = 1000
     args.seed = 99
     args.patience = 100
 
@@ -168,7 +191,7 @@ def manual_args(args: Namespace) -> Namespace:
     args.split_size = (5, 0, 1)
     # args.split_type = "random"
     # args.split_size = (0.6, 0.2, 0.2)
-    args.split_seed = 0
+    args.split_seed = 99
 
     args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
 
@@ -181,7 +204,7 @@ def manual_args(args: Namespace) -> Namespace:
         "use_features": True,
     }
 
-    args.num_workers = 8#multiprocessing.cpu_count()
+    args.num_workers = 8  # multiprocessing.cpu_count()
     # args.num_workers = 0
     args.cache_dir = "../../../" + "data/herg/"
 
