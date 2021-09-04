@@ -4,94 +4,150 @@ import os
 import sys
 import tempfile
 from argparse import Namespace, ArgumentParser
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Union, Tuple
 
+import numpy as np
 import torch
 from mlflow.tracking import MlflowClient
 from pytorch_lightning.loggers import MLFlowLogger
 
 from datasets import HERGClassifierDataModule, Hergophores
-from datasets.featurizer import match
+from datasets.featurizer import calculate_ranking_scores
 from tabnet_lightning import TabNetClassifier
 
 
-def attribution(model: TabNetClassifier,
-                dm: HERGClassifierDataModule,
-                type: str,
-                reference_smiles: Optional[List[str]] = None,
-                out_dir: str = str(tempfile.mkdtemp()) + "/",
-                out_fname: str = None,
-                ):
-    if type == "train":
-        data_loader = dm.train_dataloader()
-        smiles = dm.data.iloc[dm.train_indices]["smiles"]
-    elif type == "val":
-        data_loader = dm.val_dataloader()
-        smiles = dm.data.iloc[dm.val_indices]["smiles"]
-    elif type == "test":
-        data_loader = dm.test_dataloader()
-        smiles = dm.data.iloc[dm.test_indices]["smiles"]
-    else:
-        raise ValueError(f"unknown data type {type}")
+class Attributor:
+    """
+    Simple wrapper class which handles the atomic attribution/weights calculation, atomic ranking and logging
+    """
 
-    attribution, probs = [], []
-    for batch in data_loader:
-        _, _probs, _, _mask, *_ = model(*batch)
+    def __init__(self,
+                 model: TabNetClassifier,
+                 dm: HERGClassifierDataModule,
+                 logger: Optional[MLFlowLogger] = None,
+                 track_metrics: Optional[List[str]] = None,
+                 types: Optional[List[str]] = None,
+                 label: str = "active_g10",
+                 label_idx: int = 0,
+                 references: Union[List[str], List[Tuple[str, int]]] = None,
+                 out_dir: str = str(tempfile.mkdtemp()) + "/",
+                 out_fname: str = None,
+                 nr_samples: Optional[int] = None
+                 ):
+        super(Attributor, self).__init__()
 
-        attribution.append(_mask)
-        probs.append(_probs)
+        self.types = ["test"] if types is None else types
+        self.model = model
+        self.dm = dm
+        self.logger = logger
+        self.track_metrics = track_metrics
+        self.types = types
+        self.label = label
+        self.label_idx = label_idx
+        self.references = [(rs, ra) for rs, ra in zip(*Hergophores.get())] if references is None else references
+        self.out_dir = out_dir
+        self.out_fname = out_fname
+        self.nr_samples = nr_samples
 
-    attribution = torch.cat(attribution)
-    probs = torch.cat(probs)
+    def _attribute(self, type: str) -> Tuple[Dict, List[Dict], str, str]:
 
-    atomic_attributions = dm.atomic_attributions(smiles=smiles,
-                                                 feature_attributions=attribution.detach().cpu().numpy())
+        if type == "train":
+            data_loader = self.dm.train_dataloader()
+            data = self.dm.data.iloc[self.dm.train_indices]
+        elif type == "val":
+            data_loader = self.dm.val_dataloader()
+            data = self.dm.data.iloc[self.dm.val_indices]
+        elif type == "test":
+            data_loader = self.dm.test_dataloader()
+            data = self.dm.data.iloc[self.dm.test_indices]
 
-    reference_smiles = Hergophores.get() if not reference_smiles else reference_smiles
-    results, df = match(smiles=smiles, reference_smiles=reference_smiles, atomic_attributions=atomic_attributions)
+        else:
+            raise ValueError(f"unknown data type {type}")
 
-    out_fname = type + "_dataset" if not out_fname else out_fname
+        smiles = data["smiles"].tolist()
+        labels = data[self.label].tolist()
 
-    out_path_df = out_dir + out_fname + "-" + "attribution_details" + ".tsv"
-    df.to_csv(out_path_df, sep="\t")
+        attribution, probs = [], []
+        for batch in data_loader:
+            _, _probs, _, _mask, *_ = self.model(*batch)
 
-    out_path_results = out_dir + out_fname + "-" + "attribution_results" + ".json"
-    with open(out_path_results, "w") as f:
-        f.write(json.dumps(results))
+            attribution.append(_mask)
+            probs.append(_probs)
 
-    return results, out_path_df, out_path_results
+        attribution = torch.cat(attribution)
+        probs = torch.cat(probs)
+        preds = torch.round(probs).detach().cpu().numpy()
+        preds = preds[:, self.label_idx]
+        labels = np.array(labels)
+
+        if self.nr_samples:
+            smiles = smiles[:self.nr_samples]
+            labels = labels[:self.nr_samples, ...]
+            preds = preds[:self.nr_samples, ...]
+            attribution = attribution[:self.nr_samples, ...]
+
+        atomic_attributions = self.dm.atomic_attributions(smiles=smiles,
+                                                          feature_attributions=attribution.detach().cpu().numpy())
+
+        result, reference_results, df = calculate_ranking_scores(
+            smiles=smiles,
+            references=self.references,
+            atomic_attributions=atomic_attributions,
+            labels=labels,
+            preds=preds,
+        )
+
+        out_fname = type + "_dataset" if not self.out_fname else self.out_fname
+        out_name = self.out_dir + out_fname + "-" + "attribution_details-" + self.label
+
+        out_path_df = out_name + ".tsv"
+        df.to_csv(out_path_df, sep="\t")
+
+        out_path_results = out_name + ".json"
+        with open(out_path_results, "w") as f:
+            results = [{"attribution_results": result}] + reference_results
+
+            f.write(json.dumps(results))
+
+        return result, reference_results, out_path_df, out_path_results
+
+    def attribute(self) -> Dict:
+
+        value = lambda v: v if len(str(v)) <= 250 else "...value too long for mlflow - not inserted"
+
+        metrics = {}
+        for t in self.types:
+            result, reference_results, out_path_df, out_path_results = self._attribute(type=t)
+
+            if self.logger:
+                self.logger.experiment.log_artifact(run_id=self.logger._run_id, local_path=out_path_df)
+                self.logger.experiment.log_artifact(run_id=self.logger._run_id, local_path=out_path_results)
+
+            for i, reference_result in enumerate(reference_results):
+                reference_smile, reference_result_values = next(iter(reference_result.items()))
+
+                if self.logger:
+                    self.logger.experiment.log_param(run_id=self.logger._run_id, key="smile" + str(i), value=value(reference_smile))
+
+                for k, v in reference_result_values.items():
+                    key = t + "/" + "smile" + str(i) + "/" + k
+
+                    if key in self.track_metrics and self.logger:
+                        self.logger.experiment.log_metric(run_id=self.logger._run_id, key=key, value=v)
+
+                    metrics[key] = v
+
+            for k, v in result.items():
+                key = t + "/" + k
+                if key in self.track_metrics and self.logger:
+                    self.logger.experiment.log_metric(run_id=self.logger._run_id, key=key, value=v)
+
+                metrics[key] = v
+
+        return metrics
 
 
-def log_attribution(model: TabNetClassifier, dm: HERGClassifierDataModule, logger: MLFlowLogger, type: Optional[List[str]] = None) -> Dict:
-    if type is None:
-        type = ["train", "val", "test"]
-
-    value = lambda v: v if len(str(v)) <= 250 else "...value too long for mlflow - not inserted"
-
-    ret = {}
-    for t in type:
-        results, out_path_df, out_path_results = attribution(model, dm, type=t)
-
-        logger.experiment.log_artifact(run_id=logger._run_id, local_path=out_path_df)
-        logger.experiment.log_artifact(run_id=logger._run_id, local_path=out_path_results)
-
-        for i, result in enumerate(results[:-1]):
-            for smile, attribution_results in result.items():
-                logger.experiment.log_param(run_id=logger._run_id, key="smile" + str(i), value=value(smile))
-                logger.experiment.log_metric(run_id=logger._run_id, key=t + "/" + "smile" + str(i) + "-" + "mean_auroc",
-                                             value=attribution_results["mean_auroc"])
-
-                ret[t + "/" + "smile" + str(i) + "-" + "mean_auroc"] = attribution_results["mean_auroc"]
-
-        attribution_summary = results[-1]["attribution_summary"]
-        logger.experiment.log_metric(run_id=logger._run_id, key=t + "/" + "smile-mean_aurocs", value=attribution_summary["mean_aurocs"])
-
-        ret[t + "/" + "smile-mean_aurocs"] = attribution_summary["mean_aurocs"]
-
-    return ret
-
-
-def match_fn(args: Namespace):
+def attribution_fn(args: Namespace):
     model = TabNetClassifier.load_from_checkpoint(args.checkpoint_path + args.checkpoint_name, strict=False)
 
     args = Namespace(**dict(model.hparams_initial, **vars(args)))
@@ -119,14 +175,31 @@ def match_fn(args: Namespace):
     dm.prepare_data()
     dm.setup()
 
-    results, out_path_df, out_path_results = attribution(model, dm, type="test")
+    attributor = Attributor(
+        model=model,
+        dm=dm,
+        logger=mlf_logger,
 
-    mlf_logger.experiment.log_artifact(run_id=mlf_logger._run_id, local_path=out_path_df)
-    mlf_logger.experiment.log_artifact(run_id=mlf_logger._run_id, local_path=out_path_results)
+        **args.attribution_kwargs
+    )
+
+    metrics = attributor.attribute()
+
+    return metrics
 
 
 def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
+
+    # attribution params
+    args.attribution_kwargs = {
+        "types": ["test"],
+        "track_metrics": None,
+        "label": "active_g100",
+        "label_idx": 5,
+        # "nr_samples": 100,
+    }
+    #["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
 
     # logger/plot params
     args.experiment_name = "herg_tn_opt1"
@@ -172,4 +245,6 @@ def run_cli() -> Namespace:
 if __name__ == "__main__":
     args = run_cli()
 
-    match_fn(args)
+    metrics = attribution_fn(args)
+
+    print(metrics)
