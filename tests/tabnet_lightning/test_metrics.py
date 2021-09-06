@@ -174,6 +174,29 @@ class TestCustomAUROC():
 
         assert torch.allclose(expected_aurocs[~expected_aurocs.isnan()].mean(), auroc_mean)
 
+
+class TestThresholdMoving():
+    @pytest.mark.parametrize("preds, targets, expected_threshold", [
+        (
+                torch.Tensor([0.3, 0.2, 0.3, 0.4, 0.0, 0.6, 0.7, 0.8, 0.9, 0.1]),
+                torch.Tensor([0, 0, 0, 0, 0, 0, 0, 1, 1, 1]), .8
+        ),
+        (
+                torch.Tensor([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]),
+                torch.Tensor([0, 0, 0, 0, 0, 1, 1, 1, 1, 1]), .6
+        ),
+    ])
+    def test_determine(self, preds, targets, expected_threshold):
+
+        from tabnet_lightning.metrics import ThresholdMoving
+
+        th = ThresholdMoving.determine(preds, targets)
+
+        assert torch.allclose(torch.tensor(th), torch.tensor(expected_threshold))
+
+
+
+
 # TODO add tests for sparsity metrics
 #
 # if __name__ == "__main__":
