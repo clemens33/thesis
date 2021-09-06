@@ -3,14 +3,14 @@ import os
 import sys
 import traceback
 from argparse import Namespace, ArgumentParser
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple
 
 import torch
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import MLFlowLogger
 
-from datasets import HERGClassifierDataModule
+from datasets import HERGClassifierDataModule, Hergophores
 from experiments.herg.attribution import Attributor
 from experiments.kfold import Kfold
 from tabnet_lightning import TabNetClassifier, TabNetTrainer
@@ -82,9 +82,9 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, TabNetC
             mode="max" if not args.minimize else "min",
         ),
         EarlyStopping(
-            monitor=args.objective_name,
+            monitor="val/loss",
             patience=args.patience,
-            mode="max" if not args.minimize else "min",
+            mode="min",
         ),
         LearningRateMonitor(logging_interval="step"),
     ]
@@ -173,16 +173,17 @@ def manual_args(args: Namespace) -> Namespace:
         # "label_idx": 5,
         "label": "active_g10",
         "label_idx": 0,
+        "references": [(rs, ra) for rs, ra in zip(*Hergophores.get(Hergophores.ACTIVES_UNIQUE, by_activity=1))]
         # "nr_samples": 100,
     }
 
     # trainer/logging args
     args.objective_name = "val/AUROC"
     args.minimize = False
-    args.experiment_name = "herg_tn_kfold8"
+    args.experiment_name = "herg_tn_kfold9"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
-    args.seed = 99
+    args.seed = 1234
     args.patience = 100
 
     # data module args
@@ -191,7 +192,7 @@ def manual_args(args: Namespace) -> Namespace:
     args.split_size = (5, 0, 1)
     # args.split_type = "random"
     # args.split_size = (0.6, 0.2, 0.2)
-    args.split_seed = 99
+    args.split_seed = 1234
 
     args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
 
@@ -204,7 +205,7 @@ def manual_args(args: Namespace) -> Namespace:
         "use_features": True,
     }
 
-    args.num_workers = 8  # multiprocessing.cpu_count()
+    args.num_workers = multiprocessing.cpu_count()
     # args.num_workers = 0
     args.cache_dir = "../../../" + "data/herg/"
 

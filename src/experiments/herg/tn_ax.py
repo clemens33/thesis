@@ -3,6 +3,7 @@ import os
 import sys
 from argparse import Namespace, ArgumentParser
 
+from datasets import Hergophores
 from experiments import TuneAx
 from experiments.kfold import Kfold
 from tn import train_tn, train_tn_kfold
@@ -11,6 +12,7 @@ from tn import train_tn, train_tn_kfold
 def train_evaluate(args: Namespace):
     args.feature_size = args.decision_size * 2
 
+    args.optimizer_params["weight_decay"] = args.weight_decay
     # args.scheduler_params["decay_step"] = args.decay_step
     # args.scheduler_params["decay_rate"] = args.decay_rate
 
@@ -44,19 +46,37 @@ def manual_args(args: Namespace) -> Namespace:
         "val/Accuracy",
         "test/AUROC",
         "test/Accuracy",
-        "test/smile-mean_aurocs",
     ]
-    args.track_metrics += ["test/smile" + str(i) + "-mean_auroc" for i in range(20)]
+    args.track_metrics += [
+        "test/mean/avg_score_label_active",
+        "test/mean/avg_score_label_inactive",
+        "test/mean/avg_score_true_active",
+        "test/mean/avg_score_true_inactive",
+    ]
+    #args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
+    #args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
+
+    # attribution options
+    args.attribution_kwargs = {
+        "types": ["test"],
+        "track_metrics": args.track_metrics,
+        # "label": "active_g100",
+        # "label_idx": 5,
+        "label": "active_g10",
+        "label_idx": 0,
+        "references": [(rs, ra) for rs, ra in zip(*Hergophores.get(Hergophores.ACTIVES_UNIQUE, by_activity=1))]
+        # "nr_samples": 100,
+    }
 
     # ax args
-    args.trials = 30
-    args.trials_sobol = 10
+    args.trials = 20
+    args.trials_sobol = 5
     args.objective_name = "val/AUROC"
     args.minimize = False
     args.search_space = [
         {"name": "batch_size", "type": "choice", "values": [32, 64, 128, 512]},
 
-        {"name": "decision_size", "type": "choice", "values": [16, 24, 32, 64, 128]},
+        {"name": "decision_size", "type": "choice", "values": [32, 64, 128, 256]},
         {"name": "nr_steps", "type": "range", "bounds": [3, 10]},
         {"name": "gamma", "type": "choice", "values": [1.0, 1.2, 1.5, 2.0]},
 
@@ -65,7 +85,8 @@ def manual_args(args: Namespace) -> Namespace:
 
         {"name": "lambda_sparse", "type": "choice", "values": [0.0, 1e-6, 1e-4, 1e-3, 0.01, 0.1]},
         # {"name": "lr", "type": "choice", "values": [0.005, 0.01, 0.02, 0.025]},
-        {"name": "lr", "type": "range", "bounds": [1e-5, 0.01], "log_scale": True},
+        {"name": "lr", "type": "range", "bounds": [1e-4, 0.01], "log_scale": True},
+        {"name": "weight_decay", "type": "choice", "values": [0.0, 1e-5, 1e-4, 0.001]},
 
         # {"name": "decay_step", "type": "choice", "values": [50, 200, 800]},
         # {"name": "decay_rate", "type": "choice", "values": [0.4, 0.8, 0.9, 0.95]},
@@ -73,19 +94,19 @@ def manual_args(args: Namespace) -> Namespace:
     ]
 
     # trainer/logging args
-    args.experiment_name = "herg_tn_kfold_ax2"
+    args.experiment_name = "herg_tn_ax8"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
-    args.max_steps = 1000
-    args.seed = 9
-    args.patience = 50
+    args.max_steps = 2000
+    args.seed = 333
+    args.patience = 1000
 
     # data module args
     args.batch_size = 128
-    args.split_type = "random_kfold"
-    args.split_size = (5, 0, 1)
-    # args.split_type = "random"
-    # args.split_size = (0.6, 0.2, 0.2)
-    args.split_seed = 9
+    # args.split_type = "random_kfold"
+    # args.split_size = (5, 0, 1)
+    args.split_type = "random"
+    args.split_size = (0.6, 0.2, 0.2)
+    args.split_seed = 333
     args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
 
     args.featurizer_name = "combined"  # ecfp + macc + tox

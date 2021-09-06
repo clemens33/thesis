@@ -111,7 +111,7 @@ class Attributor:
 
         return result, reference_results, out_path_df, out_path_results
 
-    def attribute(self) -> Dict:
+    def attribute(self, verbose: bool = False) -> Dict:
 
         value = lambda v: v if len(str(v)) <= 250 else "...value too long for mlflow - not inserted"
 
@@ -120,8 +120,10 @@ class Attributor:
             result, reference_results, out_path_df, out_path_results = self._attribute(type=t)
 
             if self.logger:
-                self.logger.experiment.log_artifact(run_id=self.logger._run_id, local_path=out_path_df)
                 self.logger.experiment.log_artifact(run_id=self.logger._run_id, local_path=out_path_results)
+
+                if verbose:
+                    self.logger.experiment.log_artifact(run_id=self.logger._run_id, local_path=out_path_df)
 
             for i, reference_result in enumerate(reference_results):
                 reference_smile, reference_result_values = next(iter(reference_result.items()))
@@ -199,7 +201,7 @@ def manual_args(args: Namespace) -> Namespace:
         "label_idx": 5,
         # "nr_samples": 100,
     }
-    #["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
+    # ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
 
     # logger/plot params
     args.experiment_name = "herg_tn_opt1"
