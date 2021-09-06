@@ -1,19 +1,28 @@
 import pytest
 from tempfile import mkdtemp
-
+from datasets.herg import Hergophores
 
 class TestHergophores():
 
-    @pytest.mark.parametrize("by_groups", [
-        (None),
-        ("substructures_inactive_functional_1um"),
+    @pytest.mark.parametrize("by_smiles, by_groups, by_activity, expected_nr_hergophores", [
+        (Hergophores.ACTIVES_UNIQUE, None, 1, 5),
+        (Hergophores.INACTIVES_UNIQUE, None, 0, 5),
+
+        (None, None, None, None),
+        (None, "substructures_inactive_functional_1um", None, None),
+        (None, None, 1, None),
+
     ])
-    def test_get(self, by_groups):
+    def test_get(self, by_smiles, by_groups, by_activity, expected_nr_hergophores):
         from datasets import Hergophores
 
-        hergophores = Hergophores.get(by_groups)
+        hergophores, activities = Hergophores.get(by_smiles=by_smiles, by_groups=by_groups, by_activity=by_activity)
 
         assert len(hergophores) > 0
+        assert len(hergophores) == len(activities)
+
+        if expected_nr_hergophores:
+            assert len(hergophores) == expected_nr_hergophores
 
 
 class TestHERGClassifierDataset():

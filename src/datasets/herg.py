@@ -79,23 +79,35 @@ class Hergophores:
         "CCNCc1ccccc1",
     ]
 
-
     @staticmethod
-    def get(by_smiles: Optional[List[str]] = None, by_groups: Optional[Union[str, List[str]]] = None, filter_by_group_term: str = "") -> \
-    Tuple[List[str], List[int]]:
+    def get(
+            by_smiles: Optional[List[str]] = None,
+            by_groups: Optional[Union[str, List[str]]] = None,
+            by_activity: Optional[int] = None,
+            filter_by_group_term: str = "") -> \
+            Tuple[List[str], List[int]]:
 
         by_groups = [*Hergophores.GROUPED] if by_groups is None else by_groups
         by_groups = [by_groups] if not isinstance(by_groups, list) else by_groups
 
-        hergophores, activities = [], []
+        if by_activity == 1:
+            filter_activity = "_active_"
+        elif by_activity == 0:
+            filter_activity = "_inactive_"
+        else:
+            filter_activity = ""
+
+        hergophores, activities, tmp = [], [], []
         for k, v in Hergophores.GROUPED.items():
-            if k in by_groups and filter_by_group_term in k:
+            if k in by_groups and filter_by_group_term in k and filter_activity in k:
                 smiles = [h for h in v if h in by_smiles] if by_smiles is not None else v
+                _activives = [1 if "_active_" in k else 0] * len(smiles)
 
                 hergophores += smiles
-                activities += [1 if "_active_" in k else 0] * len(v)
+                activities += _activives
+                tmp += [h + "_" + str(a) for h, a in zip(smiles, _activives)]
 
-        unique_indices = [hergophores.index(h) for h in set(hergophores)]
+        unique_indices = [tmp.index(h) for h in set(tmp)]
         hergophores, activities = zip(*[(hergophores[i], activities[i]) for i in unique_indices])
 
         return hergophores, activities
