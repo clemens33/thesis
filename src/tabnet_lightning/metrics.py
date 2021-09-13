@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Union, Tuple
 
 import torch
 from torchmetrics import Metric
@@ -72,8 +72,9 @@ class CustomAccuracy(Metric):
             _preds = preds[mask, t]
             _targets = targets[mask, t]
 
-            self.correct[t] += torch.sum(torch.tensor(_preds == _targets))
-            self.total[t] += targets[mask, t].numel()
+            _trues = (_preds == _targets).detach().clone()
+            self.correct[t] = self.correct[t] + torch.sum(torch.tensor(_trues))
+            self.total[t] = self.total[t] + targets[mask, t].numel()
 
     def compute(self):
         accuracies = torch.zeros(self.num_targets)
@@ -109,8 +110,8 @@ class CustomAUROC(Metric):
         self.num_targets = num_targets
         self.return_verbose = return_verbose
 
-        self.add_state("preds", default=[], dist_reduce_fx=CustomAUROC.reduce_fx)
-        self.add_state("targets", default=[], dist_reduce_fx=CustomAUROC.reduce_fx)
+        self.add_state("preds", default=[], dist_reduce_fx=CustomAUROC.dist_reduce_fx)
+        self.add_state("targets", default=[], dist_reduce_fx=CustomAUROC.dist_reduce_fx)
 
     def update(self, preds: torch.Tensor, targets: torch.Tensor):
         assert targets.shape[-1] == self.num_targets if targets.ndim > 1 else True
@@ -136,7 +137,7 @@ class CustomAUROC(Metric):
                 self.preds[t] = torch.cat([self.preds[t], _p])
                 self.targets[t] = torch.cat([self.targets[t], _t])
 
-    def compute(self):
+    def compute(self) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         aurocs = torch.zeros(self.num_targets)
         for t in range(self.num_targets):
             try:
@@ -154,7 +155,7 @@ class CustomAUROC(Metric):
             return aurocs[~aurocs.isnan()].mean()
 
     @staticmethod
-    def reduce_fx(state: List[torch.Tensor]):
+    def dist_reduce_fx(state: List[torch.Tensor]):
         raise NotImplementedError("reduce fx not yet implemented")
 
 
@@ -178,8 +179,8 @@ class ThresholdMoving(Metric):
         self.ignore_index = ignore_index
         self.num_targets = num_targets
 
-        self.add_state("preds", default=[], dist_reduce_fx=CustomAUROC.reduce_fx)
-        self.add_state("targets", default=[], dist_reduce_fx=CustomAUROC.reduce_fx)
+        self.add_state("preds", default=[], dist_reduce_fx=CustomAUROC.dist_reduce_fx)
+        self.add_state("targets", default=[], dist_reduce_fx=CustomAUROC.dist_reduce_fx)
 
     def update(self, preds: torch.Tensor, targets: torch.Tensor):
         assert targets.shape[-1] == self.num_targets if targets.ndim > 1 else True
@@ -225,5 +226,5 @@ class ThresholdMoving(Metric):
         return threshold
 
     @staticmethod
-    def reduce_fx(state: List[torch.Tensor]):
+    def dist_reduce_fx(state: List[torch.Tensor]):
         raise NotImplementedError("reduce fx not yet implemented")
