@@ -143,7 +143,7 @@ class TestCustomAUROC():
         for _preds, _targets in zip(torch.chunk(preds, chunks), torch.chunk(targets, chunks)):
             fn(_preds, _targets)
 
-        auroc_mean, aurocs = fn.compute()
+        auroc_mean, aurocs, _ = fn.compute()
 
         expected_aurocs = torch.zeros(num_targets)
 
