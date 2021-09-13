@@ -158,7 +158,7 @@ class ECFPFeaturizer():
                         molecule: Union[str, Mol, bytes],
                         num_atoms: Optional[int] = None,
                         bit_info: Optional[dict] = None
-                        ) -> List[List[Tuple[int, float]]]:
+                        ) -> List[List[Tuple[int, int]]]:
         """
         gets the individual atomic mapping for one molecule - mapping indicates the feature idx + factor which contributes
         """
@@ -196,7 +196,8 @@ class ECFPFeaturizer():
 
                 for i in range(num_atoms):
                     if len(mapping_submol[i]) > 0:
-                        atomic_mapping[i].append([(_feature_idx, 1 / count_atoms) for _feature_idx in mapping_submol[i]])
+                        for _feature_idx in mapping_submol[i]:
+                            atomic_mapping[i].append((_feature_idx, count_atoms))
 
         return atomic_mapping
 
@@ -269,7 +270,7 @@ class ECFPFeaturizer():
 
         return atomic_attributions
 
-    def atomic_mappings(self, smiles: List[str]) -> List[List[List[Tuple[int, float]]]]:
+    def atomic_mappings(self, smiles: List[str]) -> List[List[List[Tuple[int, int]]]]:
         fingerprints, bit_infos, mols = self.ecfp(smiles)
 
         if self.map_dict is None:
@@ -364,7 +365,7 @@ class MACCSFeaturizer():
         return self._maccs(smiles)[0]
 
     def _atomic_mapping(self, molecule: Union[str, Mol, bytes],
-                        num_atoms: Optional[int] = None) -> List[List[Tuple[int, float]]]:
+                        num_atoms: Optional[int] = None) -> List[List[Tuple[int, int]]]:
 
         mol = _init_molecule(molecule)
         num_atoms = mol.GetNumAtoms() if not num_atoms else num_atoms
@@ -394,7 +395,8 @@ class MACCSFeaturizer():
             count_atoms = 1 if count_atoms == 0 else count_atoms
             for i in range(num_atoms):
                 if len(mapping_submol[i]) > 0:
-                    atomic_mapping[i].append([(_feature_idx, 1 / count_atoms) for _feature_idx in mapping_submol[i]])
+                    for _feature_idx in mapping_submol[i]:
+                        atomic_mapping[i].append((_feature_idx, count_atoms))
 
             # Count features
             # MACCS feature: 130
@@ -426,7 +428,9 @@ class MACCSFeaturizer():
 
                 count_atoms = 1 if count_atoms == 0 else count_atoms
                 for i in range(num_atoms):
-                    atomic_mapping[i].append([(_feature_idx, 1 / count_atoms) for _feature_idx in mapping_submol[i] if _feature_idx])
+                    if len(mapping_submol[i]) > 0:
+                        for _feature_idx in mapping_submol[i]:
+                            atomic_mapping[i].append((_feature_idx, count_atoms))
 
                 ## 146
                 if len(substructures) > 2:
@@ -441,7 +445,9 @@ class MACCSFeaturizer():
 
                     count_atoms = 1 if count_atoms == 0 else count_atoms
                     for i in range(num_atoms):
-                        atomic_mapping[i].append([(_feature_idx, 1 / count_atoms) for _feature_idx in mapping_submol[i] if _feature_idx])
+                        if len(mapping_submol[i]) > 0:
+                            for _feature_idx in mapping_submol[i]:
+                                atomic_mapping[i].append((_feature_idx, count_atoms))
 
                     ## 140
                     if len(substructures) > 3:
@@ -456,8 +462,9 @@ class MACCSFeaturizer():
 
                         count_atoms = 1 if count_atoms == 0 else count_atoms
                         for i in range(num_atoms):
-                            atomic_mapping[i].append(
-                                [(_feature_idx, 1 / count_atoms) for _feature_idx in mapping_submol[i] if _feature_idx])
+                            if len(mapping_submol[i]) > 0:
+                                for _feature_idx in mapping_submol[i]:
+                                    atomic_mapping[i].append((_feature_idx, count_atoms))
 
             # MACCS feature 142
             atomic_mapping = MACCSFeaturizer.maccs_count_features_mapping(maccs_idx, substructures, num_atoms,
@@ -490,7 +497,8 @@ class MACCSFeaturizer():
             count_atoms = 1 if count_atoms == 0 else count_atoms
             for i in range(num_atoms):
                 if len(mapping_submol[i]) > 0:
-                    atomic_mapping[i].append([(_feature_idx, 1 / count_atoms) for _feature_idx in mapping_submol[i]])
+                    for _feature_idx in mapping_submol[i]:
+                        atomic_mapping[i].append((_feature_idx, count_atoms))
 
         # MACCS 125: Aromatic rings
         atomic_mapping = MACCSFeaturizer.maccs_125_aromaticrings_mapping(mol, num_atoms, atomic_mapping)
@@ -639,7 +647,7 @@ class MACCSFeaturizer():
 
         return atomic_attribution
 
-    def atomic_mappings(self, smiles: List[str]) -> List[List[List[Tuple[int, float]]]]:
+    def atomic_mappings(self, smiles: List[str]) -> List[List[List[Tuple[int, int]]]]:
         _, mols = self._maccs(smiles)
         _mols = [m.ToBinary() for m in mols if m]
 
@@ -678,8 +686,8 @@ class MACCSFeaturizer():
 
     @staticmethod
     def maccs_count_features_mapping(maccs_idx: int, substructures, num_atoms: int,
-                                     atomic_mapping: List[List[Tuple[int, float]]], feature_idx1: int, feature_idx2: int
-                                     ) -> List[List[Tuple[int, float]]]:
+                                     atomic_mapping: List[List[Tuple[int, int]]], feature_idx1: int, feature_idx2: int
+                                     ) -> List[List[Tuple[int, int]]]:
 
         if maccs_idx == feature_idx1 and len(substructures) > 1:
             mapping_submol = [[] for _ in range(num_atoms)]
@@ -694,7 +702,8 @@ class MACCSFeaturizer():
             count_atoms = 1 if count_atoms == 0 else count_atoms
             for i in range(num_atoms):
                 if len(mapping_submol[i]) > 0:
-                    atomic_mapping[i].append([(_feature_idx, 1 / count_atoms) for _feature_idx in mapping_submol[i]])
+                    for _feature_idx in mapping_submol[i]:
+                        atomic_mapping[i].append((_feature_idx, count_atoms))
 
         return atomic_mapping
 
@@ -732,7 +741,7 @@ class MACCSFeaturizer():
 
     @staticmethod
     def maccs_125_aromaticrings_mapping(mol: Mol,
-                                        num_atoms: int, atomic_mapping: List[List[Tuple[int, float]]]):
+                                        num_atoms: int, atomic_mapping: List[List[Tuple[int, int]]]):
         substructure = list()
         ri = mol.GetRingInfo()
         ringcount = ri.NumRings()
@@ -760,7 +769,8 @@ class MACCSFeaturizer():
             count_atoms = 1 if count_atoms == 0 else count_atoms
             for i in range(num_atoms):
                 if len(mapping_submol[i]) > 0:
-                    atomic_mapping[i].append([(_feature_idx, 1 / count_atoms) for _feature_idx in mapping_submol[i]])
+                    for _feature_idx in mapping_submol[i]:
+                        atomic_mapping[i].append((_feature_idx, count_atoms))
 
         return atomic_mapping
 
@@ -800,8 +810,8 @@ class MACCSFeaturizer():
         return atomic_attribution
 
     @staticmethod
-    def maccs_166_fragments_mapping(mol: Mol, num_atoms: int, atomic_mapping: List[List[Tuple[int, float]]]) -> List[
-        List[Tuple[int, float]]]:
+    def maccs_166_fragments_mapping(mol: Mol, num_atoms: int, atomic_mapping: List[List[Tuple[int, int]]]) -> List[
+        List[Tuple[int, int]]]:
 
         frags = Chem.GetMolFrags(mol)
         if len(frags) > 1:
@@ -817,7 +827,8 @@ class MACCSFeaturizer():
             count_atoms = 1 if count_atoms == 0 else count_atoms
             for i in range(num_atoms):
                 if len(mapping_submol[i]) > 0:
-                    atomic_mapping[i].append([(_feature_idx, 1 / count_atoms) for _feature_idx in mapping_submol[i]])
+                    for _feature_idx in mapping_submol[i]:
+                        atomic_mapping[i].append((_feature_idx, count_atoms))
 
         return atomic_mapping
 
@@ -952,7 +963,7 @@ class ToxFeaturizer():
     def _atomic_mapping(self,
                         molecule: Union[str, Mol, bytes],
                         num_atoms: Optional[int] = None,
-                        ) -> List[List[Tuple[int, float]]]:
+                        ) -> List[List[Tuple[int, int]]]:
         """
         gets the individual atomic mapping for one molecule - mapping indicates the feature idx + factor which contributes
         """
@@ -966,7 +977,7 @@ class ToxFeaturizer():
 
             mapping_submol = [[] for _ in range(num_atoms)]
 
-            atom_sums = 0
+            count_atoms = 0
             for atom_idx in range(num_atoms):
                 for i in range(len(negations)):
                     neg = negations[i]
@@ -985,11 +996,13 @@ class ToxFeaturizer():
 
                         if "y" in str(atom_in_sub):
                             mapping_submol[atom_idx].append(feature_idx)
-                            atom_sums += 1
+                            count_atoms += 1
 
-            if atom_sums != 0:
+            if count_atoms != 0:
                 for i in range(num_atoms):
-                    atomic_mapping[i].append([(_feature_idx, 1 / atom_sums) for _feature_idx in mapping_submol[i] if _feature_idx])
+                    if len(mapping_submol[i]) > 0:
+                        for _feature_idx in mapping_submol[i]:
+                            atomic_mapping[i].append((_feature_idx, count_atoms))
 
         return atomic_mapping
 
@@ -1056,7 +1069,7 @@ class ToxFeaturizer():
 
         return atomic_attributions
 
-    def atomic_mappings(self, smiles: List[str]) -> List[List[List[Tuple[int, float]]]]:
+    def atomic_mappings(self, smiles: List[str]) -> List[List[List[Tuple[int, int]]]]:
         _, mols = self._toxs(smiles)
         _mols = [m.ToBinary() for m in mols if m]
 
@@ -1074,18 +1087,38 @@ class ToxFeaturizer():
         return atomic_mappings
 
 
-def _atomic_attribution_from_mapping(atomic_mapping: List[List[Tuple[int, float]]], feature_attribution: np.ndarray) -> np.ndarray:
+def _atomic_attribution_from_mapping(atomic_mapping: List[List[Tuple[int, int]]], feature_attribution: np.ndarray) -> np.ndarray:
     """calculate atomic attribution for single molecule based on provided mapping and features attributions"""
 
     num_atoms = len(atomic_mapping)
 
     atomic_attribution = np.zeros(num_atoms)
     for atom_idx, atom_map in enumerate(atomic_mapping):
-        for f_map in atom_map:
-            for feature_idx, feature_factor in f_map:
-                atomic_attribution[atom_idx] += feature_attribution[feature_idx] * feature_factor
+        for feature_idx, count_atoms in atom_map:
+            atomic_attribution[atom_idx] += feature_attribution[feature_idx] * 1 / count_atoms
 
     return atomic_attribution
+
+
+def atomic_attributions_from_mappings(atomic_mappings: List[List[List[Tuple[int, int]]]],
+                                      feature_attributions: np.ndarray,
+                                      n_jobs: int = multiprocessing.cpu_count(),
+                                      mp_context: str = "fork",
+                                      chunksize: int = None) -> List[np.ndarray]:
+    """calculate atomic attributions for multiple molecules based on provided mappings and features attributions"""
+
+    if n_jobs > 1:
+        atomic_attributions = process_map(_atomic_attribution_from_mapping, atomic_mappings, feature_attributions,
+                                          chunksize=(len(atomic_mappings) // n_jobs) + 1 if chunksize is None else chunksize,
+                                          max_workers=n_jobs,
+                                          desc="_attributions_from_atomic_mappings",
+                                          mp_context=mp.get_context(mp_context))
+    else:
+        atomic_attributions = list(
+            map(_atomic_attribution_from_mapping,
+                tqdm(atomic_mappings, total=len(atomic_mappings), desc="_attributions_from_atomic_mappings"), feature_attributions))
+
+    return atomic_attributions
 
 
 def calculate_ranking_scores(smiles: List[str],
