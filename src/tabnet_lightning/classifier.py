@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, List, Any, Union
+from typing import Tuple, Optional, List, Any, Union, Dict
 
 import pytorch_lightning as pl
 import torch
@@ -231,7 +231,7 @@ class TabNetClassifier(pl.LightningModule):
         metrics = MetricCollection(
             [
                 CustomAccuracy(num_targets=self.classifier.num_targets, ignore_index=ignore_index),
-                CustomAUROC(num_targets=self.classifier.num_targets, ignore_index=ignore_index),
+                CustomAUROC(num_targets=self.classifier.num_targets, ignore_index=ignore_index, return_verbose=True),
             ]
             if self.classifier.objective == "binary-multi-target" else [
                 Accuracy(),
@@ -267,6 +267,27 @@ class TabNetClassifier(pl.LightningModule):
                 "test_sparsity_metrics": nn.ModuleList([m.clone() for m in metrics]) if metrics else None,
             })
 
+    def _postprocess_metric_output(self, output: Dict) -> Dict:
+        """helper function to process tuple metric output - atm for CustomAUROC output"""
+
+        output = replace_key_name(output, "Custom", "")
+
+        _output = {}
+        for k, v in output.items():
+            if isinstance(v, tuple) and "AUROC" in k:
+                auroc, aurocs, thresholds = v
+                _output[k] = auroc
+
+                for i in range(len(aurocs)):
+                    _output[k + "-t" + str(i)] = aurocs[i]
+
+                for i in range(len(thresholds)):
+                    _output[k.replace("AUROC", "threshold") + "-t" + str(i)] = thresholds[i]
+            else:
+                _output[k] = v
+
+        return _output
+
     def forward(self, inputs: torch.Tensor, labels: Optional[torch.Tensor] = None) -> Tuple[
         torch.Tensor, torch.Tensor, Union[None, torch.Tensor], torch.Tensor, torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
         inputs = self.embeddings(inputs)
@@ -292,7 +313,7 @@ class TabNetClassifier(pl.LightningModule):
         self.log("train/loss", loss, prog_bar=True)
 
         output = self.train_metrics(probs, labels)
-        self.log_dict(replace_key_name(output, "Custom", ""))
+        self.log_dict(self._postprocess_metric_output(output))
 
         self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="train")
         self._log_parameters()
@@ -312,7 +333,7 @@ class TabNetClassifier(pl.LightningModule):
         output = self.val_metrics(probs, labels)
 
         if self.log_metrics:
-            self.log_dict(replace_key_name(output, "Custom", ""), prog_bar=True)
+            self.log_dict(self._postprocess_metric_output(output), prog_bar=False)
 
         self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="val")
 
@@ -337,7 +358,7 @@ class TabNetClassifier(pl.LightningModule):
         output = self.test_metrics(probs, labels)
 
         if self.log_metrics:
-            self.log_dict(replace_key_name(output, "Custom", ""))
+            self.log_dict(self._postprocess_metric_output(output))
 
         self._log_sparsity(inputs=batch[0], mask=mask, masks=masks, prefix="test")
 
