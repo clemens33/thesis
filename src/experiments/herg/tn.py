@@ -36,9 +36,10 @@ def train_tn_kfold(args: Namespace, split_size: Tuple[int, ...], split_seed: int
     return metrics
 
 
-def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, TabNetClassifier, TabNetTrainer, HERGClassifierDataModule]:
+def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, Dict, TabNetClassifier, TabNetTrainer, HERGClassifierDataModule]:
     mlf_logger = MLFlowLogger(
         experiment_name=args.experiment_name,
+        run_name=args.run_name if hasattr(args, "run_name") else None,
         tracking_uri=args.tracking_uri,
         tags=args.tags if hasattr(args, "tags") else None
     )
@@ -50,10 +51,12 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, TabNetC
         split_size=args.split_size,
         num_workers=args.num_workers,
         cache_dir=args.cache_dir,
-        # use_labels=args.use_labels,
+        use_labels=args.use_labels,
         use_cache=True,
         featurizer_name=args.featurizer_name,
-        featurizer_kwargs=args.featurizer_kwargs
+        featurizer_kwargs=args.featurizer_kwargs,
+        featurizer_mp_context="fork",
+        featurizer_chunksize=100,
     )
     dm.prepare_data()
     dm.setup()
@@ -91,15 +94,20 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, TabNetC
     if "callbacks" in kwargs:
         callbacks += kwargs["callbacks"]
 
+    max_epochs = (args.max_steps // len(dm.train_dataloader())) + 1
+
     trainer = TabNetTrainer(
         gpus=1,
         terminate_on_nan=True,
 
         max_steps=args.max_steps,
+        max_epochs=max_epochs,
         check_val_every_n_epoch=1,
+
         # terminate_on_nan=True,
 
         num_sanity_val_steps=-1,
+        stochastic_weight_avg=args.stochastic_weight_avg if hasattr(args, "stochastic_weight_avg") else False,
 
         deterministic=True,
         # precision=16,
@@ -116,6 +124,12 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, TabNetC
 
         print(traceback.format_exc())
         print(sys.exc_info())
+
+    # gets the best training metrics
+    r = trainer.test(test_dataloaders=dm.train_dataloader())
+    results_train_best = {}
+    for k, v in r[0].items():
+        results_train_best[k.replace("test", "train")] = v
 
     # gets the best validation metrics
     r = trainer.test(test_dataloaders=dm.val_dataloader())
@@ -135,6 +149,10 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, TabNetC
     if args.attribution_kwargs is not None:
         model = TabNetClassifier.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
 
+        if "threshold" not in args.attribution_kwargs:
+            key = "train/threshold-t" + str(args.attribution_kwargs["label_idx"])
+            args.attribution_kwargs["threshold"] = results_train_best[key] if key in results_train_best else .5
+
         attributor = Attributor(
             model=model,
             dm=dm,
@@ -145,7 +163,7 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, TabNetC
 
         results_attribution = attributor.attribute()
 
-    return results_test[0], results_val_best, results_val_last, results_attribution, classifier, trainer, dm
+    return results_test[0], results_val_best, results_val_last, results_attribution, results_train_best, classifier, trainer, dm
 
 
 def manual_args(args: Namespace) -> Namespace:
@@ -159,11 +177,11 @@ def manual_args(args: Namespace) -> Namespace:
         "test/Accuracy",
     ]
     args.track_metrics += [
-        "test/mean/avg_score_true_active",
-        "test/mean/avg_score_true_inactive",
+        "test/mean/avg_score_pred_active",
+        "test/mean/avg_score_pred_inactive",
     ]
-    args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
-    args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
+    # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
+    # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
 
     # attribution options
     args.attribution_kwargs = {
@@ -177,24 +195,28 @@ def manual_args(args: Namespace) -> Namespace:
         # "nr_samples": 100,
     }
 
+    # [333, 7664, 9744, 1432, 1138 ]
+
     # trainer/logging args
     args.objective_name = "val/AUROC"
     args.minimize = False
-    args.experiment_name = "herg_tn_kfold9"
+    args.experiment_name = "herg_tn_test1"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
-    args.seed = 1234
-    args.patience = 100
+    args.stochastic_weight_avg = True
+    args.seed = 333
+    args.patience = 1000
 
     # data module args
-    args.batch_size = 128
-    args.split_type = "random_kfold"
-    args.split_size = (5, 0, 1)
-    # args.split_type = "random"
-    # args.split_size = (0.6, 0.2, 0.2)
-    args.split_seed = 1234
+    args.batch_size = 64
+    # args.split_type = "random_kfold"
+    # args.split_size = (5, 0, 1)
+    args.split_type = "random"
+    args.split_size = (0.6, 0.2, 0.2)
+    args.split_seed = 333
 
     args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
+    # args.use_labels = ["active_g10", "active_g20"]
 
     args.featurizer_name = "combined"
     args.featurizer_kwargs = {
@@ -210,14 +232,14 @@ def manual_args(args: Namespace) -> Namespace:
     args.cache_dir = "../../../" + "data/herg/"
 
     # model args
-    args.decision_size = 64
+    args.decision_size = 32
     args.feature_size = args.decision_size * 2
     args.nr_layers = 2
     args.nr_shared_layers = 2
-    args.nr_steps = 5
-    args.gamma = 1.5
+    args.nr_steps = 7
+    args.gamma = 1.2
 
-    args.lambda_sparse = 1e-6
+    args.lambda_sparse = 1e-06
 
     # args.virtual_batch_size = 32  # -1 do not use any batch normalization
     args.virtual_batch_size = -1  # -1 do not use any batch normalization
@@ -229,22 +251,19 @@ def manual_args(args: Namespace) -> Namespace:
     args.normalize_input = False
     # args.virtual_batch_size = 256  # -1 do not use any batch normalization
 
-    args.lr = 0.0004
+    args.lr = 0.001
     # args.optimizer = "adam"
-    # args.scheduler = "exponential_decay"
-    # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
-
     args.optimizer = "adamw"
-    args.optimizer_params = {"weight_decay": 0.0001}
+    args.optimizer_params = {"weight_decay": 0.001}
+
+    # args.scheduler = "exponential_decay"
+    # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.8}
     args.scheduler = "linear_with_warmup"
-    # args.scheduler_params = {"warmup_steps": 10}
-    args.scheduler_params = {"warmup_steps": 0.01}
+    args.scheduler_params = {"warmup_steps": 0.05}
 
     args.log_sparsity = True
     # args.log_sparsity = "verbose"
     # args.log_parameters = False
-    args.attribution = ["test"]
-    # args.attribution = None
 
     return args
 
