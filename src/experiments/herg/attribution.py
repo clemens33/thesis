@@ -4,12 +4,15 @@ import os
 import sys
 import tempfile
 from argparse import Namespace, ArgumentParser
+from pathlib import Path, PurePosixPath
 from typing import Optional, List, Dict, Union, Tuple
 
 import numpy as np
 import torch
 from mlflow.tracking import MlflowClient
+from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import MLFlowLogger
+from torch.utils.data import DataLoader
 
 from datasets import HERGClassifierDataModule, Hergophores
 from datasets.featurizer import calculate_ranking_scores
@@ -32,7 +35,8 @@ class Attributor:
                  references: Union[List[str], List[Tuple[str, int]]] = None,
                  out_dir: str = str(tempfile.mkdtemp()) + "/",
                  out_fname: str = None,
-                 nr_samples: Optional[int] = None
+                 nr_samples: Optional[int] = None,
+                 threshold: Optional[float] = None,
                  ):
         super(Attributor, self).__init__()
 
@@ -48,24 +52,19 @@ class Attributor:
         self.out_dir = out_dir
         self.out_fname = out_fname
         self.nr_samples = nr_samples
+        self.threshold = self._determine_treshold(.5) if threshold is None else threshold
 
-    def _attribute(self, type: str) -> Tuple[Dict, List[Dict], str, str]:
+    def _determine_treshold(self, threshold_default: float = .5) -> float:
+        metrics = Trainer().test(model=self.model, test_dataloaders=self.dm.train_dataloader())
 
-        if type == "train":
-            data_loader = self.dm.train_dataloader()
-            data = self.dm.data.iloc[self.dm.train_indices]
-        elif type == "val":
-            data_loader = self.dm.val_dataloader()
-            data = self.dm.data.iloc[self.dm.val_indices]
-        elif type == "test":
-            data_loader = self.dm.test_dataloader()
-            data = self.dm.data.iloc[self.dm.test_indices]
-
+        key = "test/threshold-t" + str(self.label_idx)
+        if key in metrics[0]:
+            return metrics[0][key]
         else:
-            raise ValueError(f"unknown data type {type}")
+            return threshold_default
 
-        smiles = data["smiles"].tolist()
-        labels = data[self.label].tolist()
+    def _attribution(self, data_loader: DataLoader) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """gets the tabnet attribution using the defined data_loader"""
 
         attribution, probs = [], []
         for batch in data_loader:
@@ -74,20 +73,67 @@ class Attributor:
             attribution.append(_mask)
             probs.append(_probs)
 
-        attribution = torch.cat(attribution)
+        attribution = torch.cat(attribution).detach().cpu().numpy()
         probs = torch.cat(probs)
-        preds = torch.round(probs).detach().cpu().numpy()
+        preds = (probs > self.threshold).float()
+        preds = preds.detach().cpu().numpy()
         preds = preds[:, self.label_idx]
+
+        return attribution, preds, probs.detach().cpu().numpy()
+
+    def _attribute(self, type: str) -> Tuple[Dict, List[Dict], str, str]:
+
+        def _filter_mappings(featurizer_atomic_mappings, indices):
+            featurizer_atomic_mappings_filtered = []
+            for atomic_mappings in featurizer_atomic_mappings:
+                featurizer_atomic_mappings_filtered.append([atomic_mappings[idx] for idx in indices])
+
+            return featurizer_atomic_mappings_filtered
+
+        featurizer_atomic_mappings = None
+        if type == "train":
+            data_loader = self.dm.train_dataloader()
+            data = self.dm.data.iloc[self.dm.train_indices]
+
+            if self.dm.featurizer_atomic_mappings is not None:
+                featurizer_atomic_mappings = _filter_mappings(self.dm.featurizer_atomic_mappings, self.dm.train_indices)
+
+        elif type == "val":
+            data_loader = self.dm.val_dataloader()
+            data = self.dm.data.iloc[self.dm.val_indices]
+
+            if self.dm.featurizer_atomic_mappings is not None:
+                featurizer_atomic_mappings = _filter_mappings(self.dm.featurizer_atomic_mappings, self.dm.val_indices)
+
+        elif type == "test":
+            data_loader = self.dm.test_dataloader()
+            data = self.dm.data.iloc[self.dm.test_indices]
+
+            if self.dm.featurizer_atomic_mappings is not None:
+                featurizer_atomic_mappings = _filter_mappings(self.dm.featurizer_atomic_mappings, self.dm.test_indices)
+
+        else:
+            raise ValueError(f"unknown data type {type}")
+
+        smiles = data["smiles"].tolist()
+        labels = data[self.label].tolist()
+
+        attribution, preds, _ = self._attribution(data_loader)
         labels = np.array(labels)
 
         if self.nr_samples:
+            if featurizer_atomic_mappings is not None:
+                for i in range(len(featurizer_atomic_mappings)):
+                    featurizer_atomic_mappings[i] = featurizer_atomic_mappings[i][:self.nr_samples]
+
             smiles = smiles[:self.nr_samples]
             labels = labels[:self.nr_samples, ...]
             preds = preds[:self.nr_samples, ...]
             attribution = attribution[:self.nr_samples, ...]
 
-        atomic_attributions = self.dm.atomic_attributions(smiles=smiles,
-                                                          feature_attributions=attribution.detach().cpu().numpy())
+        atomic_attributions = self.dm.atomic_attributions(
+            smiles_or_mappings=smiles if featurizer_atomic_mappings is None else featurizer_atomic_mappings,
+            feature_attributions=attribution)
 
         result, reference_results, df = calculate_ranking_scores(
             smiles=smiles,
@@ -129,6 +175,8 @@ class Attributor:
                 reference_smile, reference_result_values = next(iter(reference_result.items()))
 
                 if self.logger:
+                    self.logger.experiment.log_param(run_id=self.logger._run_id, key="train/threshold-t" + str(self.label_idx),
+                                                     value=value(self.threshold))
                     self.logger.experiment.log_param(run_id=self.logger._run_id, key="smile" + str(i), value=value(reference_smile))
 
                 for k, v in reference_result_values.items():
@@ -167,11 +215,14 @@ def attribution_fn(args: Namespace):
         batch_size=args.batch_size,
         num_workers=multiprocessing.cpu_count(),
         cache_dir=args.cache_dir,
-        split_seed=model.hparams.split_seed,  # use same seed / random state as tabnet original implementation
+        split_seed=model.hparams.split_seed,
         split_type=args.split_type,
         split_size=args.split_size,
         featurizer_name=model.hparams.featurizer_name,
         featurizer_kwargs=model.hparams.featurizer_kwargs,
+        featurizer_n_jobs=args.featurizer_n_jobs,
+        featurizer_mp_context=args.featurizer_mp_context,
+        featurizer_chunksize=args.featurizer_chunksize,
     )
 
     dm.prepare_data()
@@ -193,25 +244,38 @@ def attribution_fn(args: Namespace):
 def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
 
+    args.track_metrics = []
+    args.track_metrics += [
+        "test/mean/avg_score_true_active",
+        "test/mean/avg_score_true_inactive",
+    ]
+    args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
+    args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
+
     # attribution params
     args.attribution_kwargs = {
         "types": ["test"],
-        "track_metrics": None,
-        "label": "active_g100",
-        "label_idx": 5,
+        "track_metrics": args.track_metrics,
+        # "label": "active_g100",
+        # "label_idx": 5,
+        "label": "active_g10",
+        "label_idx": 0,
+        "references": [(rs, ra) for rs, ra in zip(*Hergophores.get(Hergophores.ACTIVES_UNIQUE, by_activity=1))]
         # "nr_samples": 100,
     }
     # ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
 
     # logger/plot params
-    args.experiment_name = "herg_tn_opt1"
-    args.experiment_id = "152"
-    args.run_id = "38a991230dca488b9b3d107e1ca9fcc7"
+    args.experiment_name = "herg_tn_ax_1009_02"
+    args.experiment_id = "176"
+    args.run_id = "e0ea643ab63f49dfb5a62271051f9edd"
     # args.run_id = "c244505250e24ba889c8a144488b926d"
     # args.run_id = "4e9cbbcdb36f4691a34af0ecfc1b94ca"
     # args.run_id = "b12fbb9514444737b9e37cab856514ec"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
-    args.checkpoint_name = "epoch=5-step=221.ckpt"
+
+    p = list(Path(PurePosixPath("./" + args.experiment_id + "/" + args.run_id + "/checkpoints/")).glob("**/*.ckpt"))[0]
+    args.checkpoint_name = p.name
     args.checkpoint_path = "./" + args.experiment_id + "/" + args.run_id + "/checkpoints/"
 
     args.max_steps = 1000000
@@ -222,6 +286,9 @@ def manual_args(args: Namespace) -> Namespace:
     args.batch_size = 16384
     args.split_type = "random"
     args.split_size = (0.6, 0.2, 0.2)
+    args.featurizer_n_jobs = 8
+    args.featurizer_mp_context = "fork"
+    args.featurizer_chunksize = 100
 
     args.cache_dir = "../../../" + "data/herg/"
 
