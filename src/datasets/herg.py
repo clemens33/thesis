@@ -1,4 +1,5 @@
 import multiprocessing
+import pickle
 from argparse import Namespace
 from pathlib import Path, PurePosixPath
 from typing import Optional, List, Tuple, Union
@@ -14,7 +15,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import TensorDataset, DataLoader
 
-from datasets.featurizer import ECFPFeaturizer, MACCSFeaturizer, ToxFeaturizer
+from datasets.featurizer import ECFPFeaturizer, MACCSFeaturizer, ToxFeaturizer, atomic_attributions_from_mappings
 from datasets.utils import split_kfold
 
 
@@ -129,6 +130,9 @@ class HERGClassifierDataModule(pl.LightningDataModule):
                  featurizer_name: str = "combined",
                  featurizer_kwargs: Optional[dict] = None,
                  standardize: bool = True,
+                 featurizer_n_jobs: int = 0,
+                 featurizer_mp_context: str = "fork",
+                 featurizer_chunksize: int = 100,
                  **kwargs):
         """
 
@@ -146,6 +150,7 @@ class HERGClassifierDataModule(pl.LightningDataModule):
             featurizer_name: at the moment only combined is used - meaning ecfp + maccs + tox will be concatenated.
             featurizer_kwargs: featurizer kwargs for ecfp featurizer (radius, folding, return counts)
             standardize: default true - standardize features
+            featurizer_mp_context: used for mp context within featurizer
         """
         super(HERGClassifierDataModule, self).__init__()
 
@@ -160,13 +165,21 @@ class HERGClassifierDataModule(pl.LightningDataModule):
         self.split_seed = split_seed
         self.featurizer_name = featurizer_name
         self.featurizer_kwargs = featurizer_kwargs
+        self.featurizer_n_jobs = featurizer_n_jobs
+        self.featurizer_mp_context = featurizer_mp_context
+        self.featurizer_chunksize = featurizer_chunksize
         self.standardize = standardize
 
         if featurizer_name == "combined":
-            self.featurizer = [ECFPFeaturizer(n_jobs=num_workers, **featurizer_kwargs), MACCSFeaturizer(n_jobs=num_workers),
-                               ToxFeaturizer(n_jobs=num_workers)]
+            self.featurizer = [
+                ECFPFeaturizer(n_jobs=featurizer_n_jobs, mp_context=featurizer_mp_context, chunksize=featurizer_chunksize,
+                               **featurizer_kwargs),
+                MACCSFeaturizer(n_jobs=featurizer_n_jobs, mp_context=featurizer_mp_context, chunksize=featurizer_chunksize),
+                ToxFeaturizer(n_jobs=featurizer_n_jobs, mp_context=featurizer_mp_context, chunksize=featurizer_chunksize)]
         else:
             raise ValueError(f"featurizer {featurizer_name} is unknown")
+
+        self.featurizer_atomic_mappings = None
 
         self.kwargs = kwargs
 
@@ -176,8 +189,9 @@ class HERGClassifierDataModule(pl.LightningDataModule):
         if self.featurizer_name == "combined":
             featurizer_kwargs = "_".join([k + "-" + str(v) for k, v in self.featurizer_kwargs.items()])
             cached_descriptors = self.cache_dir + "herg" + "_combined" + "_" + featurizer_kwargs + ".npz"
+            cached_mappings = self.cache_dir + "herg" + "_combined" + "_" + featurizer_kwargs + ".pickle"
 
-            if Path(PurePosixPath(cached_descriptors)).exists() and self.use_cache:
+            if (Path(PurePosixPath(cached_descriptors)).exists() and Path(PurePosixPath(cached_mappings)).exists()) and self.use_cache:
                 return
 
             data = pd.read_csv(HERGClassifierDataModule.DATA_PATH, sep="\t")
@@ -186,9 +200,13 @@ class HERGClassifierDataModule(pl.LightningDataModule):
             Path(PurePosixPath(cached_descriptors)).parent.mkdir(parents=True, exist_ok=True)
 
             desc_mat = self.featurize(data["smiles"].tolist())
+            featurizer_atomic_mappings = self.atomic_mappings(data["smiles"].tolist())
 
             sparse_desc_mat = csr_matrix(desc_mat)
             save_npz(cached_descriptors, sparse_desc_mat)
+
+            with open(cached_mappings, "wb") as f:
+                pickle.dump(featurizer_atomic_mappings, f)
         else:
             raise ValueError(f"unknown featurizer {self.featurizer_name}")
 
@@ -196,15 +214,20 @@ class HERGClassifierDataModule(pl.LightningDataModule):
         if self.featurizer_name == "combined":
             featurizer_kwargs = "_".join([k + "-" + str(v) for k, v in self.featurizer_kwargs.items()])
             cached_descriptors = self.cache_dir + "herg" + "_combined" + "_" + featurizer_kwargs + ".npz"
+            cached_mappings = self.cache_dir + "herg" + "_combined" + "_" + featurizer_kwargs + ".pickle"
         else:
             raise ValueError(f"unknown featurizer {self.featurizer_name}")
+
+        if self.featurizer_atomic_mappings is None:
+            with open(cached_mappings, "rb") as f:
+                self.featurizer_atomic_mappings = pickle.load(f)
 
         sparse_desc_mat = load_npz(cached_descriptors)
         X = sparse_desc_mat.toarray()
 
         data = pd.read_csv(HERGClassifierDataModule.DATA_PATH, sep="\t")
 
-        if self.featurizer_name == "combined":
+        if self.featurizer_name == "combined" and self.featurizer_atomic_mappings is None:
             # necessary to reinitialize feature map within ecfp featurizer
             self.featurizer[0].fit_transform(data["smiles"].tolist())
 
@@ -263,6 +286,14 @@ class HERGClassifierDataModule(pl.LightningDataModule):
 
         return desc_mat
 
+    def atomic_mappings(self, smiles: List[str]) -> List[List[List[List[Tuple[int, float]]]]]:
+        featurizer_atomic_mappings = []
+
+        for featurizer in self.featurizer:
+            featurizer_atomic_mappings.append(featurizer.atomic_mappings(smiles))
+
+        return featurizer_atomic_mappings
+
     # TODO - calculate class weights
     def determine_class_weights(self):
         pass
@@ -299,29 +330,48 @@ class HERGClassifierDataModule(pl.LightningDataModule):
         else:
             return None
 
+    @rank_zero_only
     def atomic_attributions(self,
-                            smiles: List[str],
+                            smiles_or_mappings: Union[List[str], List[List[List[Tuple[int, int]]]]],
                             feature_attributions: np.ndarray,
                             postprocess: Optional[str] = None
                             ) -> List[np.ndarray]:
-        if len(smiles) != len(feature_attributions):
-            raise ValueError(f"number of smiles {len(smiles)} must match the number of feature attributions {len(feature_attributions)}")
+
+        is_smiles = True if isinstance(smiles_or_mappings[0], str) else False
+        n_samples = len(smiles_or_mappings) if is_smiles else len(smiles_or_mappings[0])
 
         featurizer_atomic_attributions = []
-        ptr = 0
-        for featurizer in self.featurizer:
-            _fa = feature_attributions[:, ptr:ptr + featurizer.n_features]
+        if is_smiles:
 
-            featurizer_atomic_attributions.append(featurizer.atomic_attributions(smiles, _fa))
-            ptr += featurizer.n_features
+            ptr = 0
+            for featurizer in self.featurizer:
+                _fa = feature_attributions[:, ptr:ptr + featurizer.n_features]
 
+                featurizer_atomic_attributions.append(featurizer.atomic_attributions(smiles_or_mappings, _fa))
+                ptr += featurizer.n_features
+        else:
+
+            ptr = 0
+            for atomic_mappings, featurizer in zip(smiles_or_mappings, self.featurizer):
+                _fa = feature_attributions[:, ptr:ptr + featurizer.n_features]
+
+                featurizer_atomic_attributions.append(atomic_attributions_from_mappings(
+                    atomic_mappings, _fa,
+                    n_jobs=self.featurizer_n_jobs,
+                    mp_context=self.featurizer_mp_context,
+                    chunksize=self.featurizer_chunksize,
+                ))
+                ptr += featurizer.n_features
+
+        # if we have attributions from multiple featurizers summarize them
         atomic_attributions = []
-        for i in range(len(smiles)):
+        for i in range(n_samples):
 
             _aa = None
             for _faa in featurizer_atomic_attributions:
                 _aa = _aa + _faa[i] if _aa is not None else _faa[i]
 
+            # TODO rework - make sure postprocess handles 0/nan in denum
             if postprocess == "normalize":
                 _aa = (_aa - np.min(_aa)) / (
                         np.max(_aa) - np.min(_aa))
@@ -345,7 +395,7 @@ class HERGClassifierDataModule(pl.LightningDataModule):
             types = [int, float, str, dict, list, bool, tuple]
 
         if ignore_param is None:
-            ignore_param = ["class_weights"]
+            ignore_param = ["class_weights", "featurizer_atomic_mappings", "featurizer", "track_metrics", "use_labels"]
 
         params = {}
         for k, v in self.__dict__.items():
