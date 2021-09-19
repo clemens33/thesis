@@ -1,4 +1,4 @@
-from typing import List, Union, Tuple
+from typing import List, Union, Tuple, Dict, Optional
 
 import torch
 from torchmetrics import Metric
@@ -228,3 +228,35 @@ class ThresholdMoving(Metric):
     @staticmethod
     def dist_reduce_fx(state: List[torch.Tensor]):
         raise NotImplementedError("reduce fx not yet implemented")
+
+
+def _replace_key_name(d: dict, to_replace: str, replace_with: str) -> Dict:
+    return {
+        k.replace(to_replace, replace_with) if isinstance(k, str) else k: v for k, v in d.items()
+    }
+
+
+def postprocess_metric_output(output: Dict, stage: Optional[str] = None) -> Dict:
+    """helper function to process tuple metric output - atm for CustomAUROC output"""
+
+    value_of = lambda _v: _v.item() if isinstance(_v, torch.Tensor) else _v
+
+    output = _replace_key_name(output, "Custom", "")
+
+    _output = {}
+    for k, v in output.items():
+        k = stage + "/" + k if stage is not None else k
+
+        if isinstance(v, tuple) and "AUROC" in k:
+            auroc, aurocs, thresholds = v
+            _output[k] = value_of(auroc)
+
+            for i in range(len(aurocs)):
+                _output[k + "-t" + str(i)] = value_of(aurocs[i])
+
+            for i in range(len(thresholds)):
+                _output[k.replace("AUROC", "threshold") + "-t" + str(i)] = value_of(thresholds[i])
+        else:
+            _output[k] = value_of(v)
+
+    return _output
