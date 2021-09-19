@@ -56,13 +56,13 @@ def manual_args(args: Namespace) -> Namespace:
         "test/Accuracy",
     ]
     args.track_metrics += [
-        "test/mean/avg_score_label_active",
-        "test/mean/avg_score_label_inactive",
-        "test/mean/avg_score_true_active",
-        "test/mean/avg_score_true_inactive",
+        #"test/mean/avg_score_label_active",
+        #"test/mean/avg_score_true_active",
+        "test/mean/avg_score_pred_inactive",
+        #"test/mean/avg_score_true_inactive",
     ]
-    args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
-    args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
+    #args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
+    #args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
 
     # attribution options
     args.attribution_kwargs = {
@@ -77,9 +77,9 @@ def manual_args(args: Namespace) -> Namespace:
     }
 
     # optuna args
-    args.trials = 30
+    args.trials = 20
     args.objective_name = "val/AUROC"
-    args.minimize = False
+    args.minimize = True
     args.sampler_name = "tpe"
     # args.pruner_name = "median"
     args.pruner_name = None
@@ -96,7 +96,7 @@ def manual_args(args: Namespace) -> Namespace:
 
         {"name": "lambda_sparse", "type": "choice", "values": [0.0, 1e-6, 1e-4, 1e-3, 0.01, 0.1]},
         {"name": "lr", "type": "choice", "values": [0.0005, 0.001, 0.002, 0.003, 0.005]},
-        {"name": "warmup_steps", "type": "choice", "values": [0.01, 0.05, 0.1]},
+        {"name": "warmup_steps", "type": "choice", "values": [0.01, 0.05, 0.1, 0]},
         # {"name": "lr", "type": "range", "bounds": [1e-5, 0.01], "log_scale": True},
 
         # {"name": "decay_step", "type": "choice", "values": [50, 200, 800]},
@@ -105,12 +105,13 @@ def manual_args(args: Namespace) -> Namespace:
     ]
 
     # trainer/logging args
-    args.experiment_name = "herg_tn_opt3"
+    args.experiment_name = "herg_tn_opt6"
     args.run_name = "kfold+attr+warmupsteps+gst"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
-    args.seed = 334
-    args.patience = 10
+    args.seed = 99
+    args.patience = 3
+    args.stochastic_weight_avg = True
 
     # data module args
     args.batch_size = 128
@@ -118,8 +119,9 @@ def manual_args(args: Namespace) -> Namespace:
     #args.split_size = (5, 0, 1)
     args.split_type = "random"
     args.split_size = (0.6, 0.2, 0.2)
-    args.split_seed = 334
-    args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
+    args.split_seed = 99
+    #args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
+    args.use_labels = ["active_g10"]
 
     args.featurizer_name = "combined"  # ecfp + macc + tox
     args.featurizer_kwargs = {

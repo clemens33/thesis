@@ -1,4 +1,3 @@
-import multiprocessing
 import os
 import sys
 import traceback
@@ -88,6 +87,7 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, Dict, T
             monitor="val/loss",
             patience=args.patience,
             mode="min",
+            verbose=True,
         ),
         LearningRateMonitor(logging_interval="step"),
     ]
@@ -102,7 +102,8 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, Dict, T
 
         max_steps=args.max_steps,
         max_epochs=max_epochs,
-        check_val_every_n_epoch=1,
+        # check_val_every_n_epoch=1,
+        val_check_interval=0.5,
 
         # terminate_on_nan=True,
 
@@ -177,7 +178,7 @@ def manual_args(args: Namespace) -> Namespace:
         "test/Accuracy",
     ]
     args.track_metrics += [
-        "test/mean/avg_score_pred_active",
+        # "test/mean/avg_score_pred_active",
         "test/mean/avg_score_pred_inactive",
     ]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
@@ -191,8 +192,14 @@ def manual_args(args: Namespace) -> Namespace:
         # "label_idx": 5,
         "label": "active_g10",
         "label_idx": 0,
-        "references": [(rs, ra) for rs, ra in zip(*Hergophores.get(Hergophores.ACTIVES_UNIQUE, by_activity=1))]
+        "references": [(rs, ra) for rs, ra in zip(*Hergophores.get(Hergophores.ACTIVES_UNIQUE, by_activity=1))],
         # "nr_samples": 100,
+        "model_attribution_kwargs": {
+            # "type": "integrated_gradients",
+            # "postprocess": "normalize",
+            "type": "tabnet",
+
+        }
     }
 
     # [333, 7664, 9744, 1432, 1138 ]
@@ -200,12 +207,13 @@ def manual_args(args: Namespace) -> Namespace:
     # trainer/logging args
     args.objective_name = "val/AUROC"
     args.minimize = False
-    args.experiment_name = "herg_tn_test1"
+    args.experiment_name = "herg_tn_attr1"
+    args.run_name = "same_splitseed_diff_seed"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
     args.stochastic_weight_avg = True
-    args.seed = 333
-    args.patience = 1000
+    args.seed = 100
+    args.patience = 20
 
     # data module args
     args.batch_size = 64
@@ -213,10 +221,10 @@ def manual_args(args: Namespace) -> Namespace:
     # args.split_size = (5, 0, 1)
     args.split_type = "random"
     args.split_size = (0.6, 0.2, 0.2)
-    args.split_seed = 333
+    args.split_seed = 99
 
-    args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
-    # args.use_labels = ["active_g10", "active_g20"]
+    # args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
+    args.use_labels = ["active_g10"]
 
     args.featurizer_name = "combined"
     args.featurizer_kwargs = {
@@ -226,9 +234,10 @@ def manual_args(args: Namespace) -> Namespace:
         "use_chirality": True,
         "use_features": True,
     }
+    # args.featurizer_n_jobs = 8
 
-    args.num_workers = multiprocessing.cpu_count()
-    # args.num_workers = 0
+    # args.num_workers = multiprocessing.cpu_count()
+    args.num_workers = 8
     args.cache_dir = "../../../" + "data/herg/"
 
     # model args
