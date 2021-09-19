@@ -32,3 +32,6 @@ dependencies:
       - optuna
       - ax-platform
       - entmax==1.0
+      - treeinterpreter
+      - lime
+      - captum
