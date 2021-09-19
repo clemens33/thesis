@@ -1,14 +1,13 @@
 import tempfile
 import uuid
-from typing import Union, List, Optional, Dict
+from typing import Union, List, Optional, Tuple
 
 import numpy as np
 import torch
+import torch.nn as nn
 from matplotlib import pyplot as plt
 from matplotlib.figure import figaspect
 from torch.optim.lr_scheduler import LambdaLR
-
-import torch.nn as nn
 
 
 class MultiEmbedding(nn.Module):
@@ -72,6 +71,26 @@ class StackedEmbedding(nn.Module):
         input[..., self.embedding_indices] = output
 
         return input
+
+
+def determine_objective(num_classes: Union[int, List[int]]) -> Tuple[str, int, int]:
+    if isinstance(num_classes, int):
+        if num_classes == 2:
+            return "binary", 2, 1
+
+        elif num_classes > 2:
+            return "multi-class", num_classes, 1
+
+        else:
+            ValueError(f"num_classes {num_classes} not supported")
+    elif isinstance(num_classes, list):
+        if all(c == 2 for c in num_classes):
+            return "binary-multi-target", 2, len(num_classes)
+
+        else:
+            raise AttributeError("multi class (non binary), multi target objective not supported yet")
+    else:
+        raise AttributeError(f"provided num classes type {type(num_classes)} not supported")
 
 
 def get_linear_schedule_with_warmup(optimizer, num_warmup_steps: Union[int, float], num_training_steps, last_epoch=-1):
@@ -319,12 +338,6 @@ def plot_rankings(mask: torch.Tensor,
     fig1.savefig(path, transparent=False)
 
     return path
-
-
-def replace_key_name(d: dict, to_replace: str, replace_with: str) -> Dict:
-    return {
-        k.replace(to_replace, replace_with) if isinstance(k, str) else k: v for k, v in d.items()
-    }
 
 # TODO - move to pytest
 # if __name__ == "__main__":
