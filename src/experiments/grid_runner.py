@@ -2,7 +2,7 @@ import copy
 import itertools
 import uuid
 from argparse import Namespace
-from typing import Callable, Dict, Optional, Any
+from typing import Callable, Dict, Optional, Any, List
 
 import mlflow
 import numpy as np
@@ -13,7 +13,7 @@ class GridRunner:
     def __init__(self,
                  function: Callable[[Namespace], Any],
                  grid_space: Dict,
-                 objective_name: Optional[str] = "objective",
+                 track_metrics: List[str],
                  experiment_name: str = str(uuid.uuid4()),
                  max_trials: Optional[int] = None,
                  args: Optional[Namespace] = None,
@@ -40,13 +40,13 @@ class GridRunner:
                 grid_space[k] = [v]
         self.grid_space = grid_space
 
-        self.objective_name = objective_name
+        self.track_metrics = track_metrics
         self.max_trials = max_trials if max_trials is not None else 2 ** 32 - 1
         self.experiment_name = experiment_name
         self.tracking_uri = tracking_uri
         self.args = args if args is not None else Namespace()
 
-        self.metrics = []
+        self.metrics = {}
 
     def __iter__(self):
         param_keys = self.grid_space.keys()
@@ -58,7 +58,7 @@ class GridRunner:
     def __len__(self):
         return len(list(itertools.product(*self.grid_space.values())))
 
-    def run(self):
+    def run(self) -> Dict[str, float]:
         for trial, parameterization in enumerate(iter(self)):
             print(f"start trial {trial + 1}/{len(self)} - parameterization: {parameterization}")
 
@@ -73,19 +73,21 @@ class GridRunner:
 
             metrics = self.function(args)
 
-            if isinstance(metrics, tuple):
-                metrics = metrics[0]
+            for metric_name in self.track_metrics:
+                if metric_name in metrics:
+                    values = self.metrics.get(metric_name, [])
+                    values.append(metrics[metric_name])
 
-            if isinstance(metrics, dict):
-                metric = metrics[self.objective_name] if self.objective_name in metrics else "n/a"
-            else:
-                metric = metrics if type(metrics) in [int, float] else "n/a"
-
-            self.metrics.append(metric)
-
-            print(f"end trial {trial + 1}/{len(self)} - metric: {metric} - parameterization: {parameterization}")
+                    self.metrics[metric_name] = values
 
         self.log()
+
+        metrics = {}
+        for metric_name in self.track_metrics:
+            if metric_name in self.metrics:
+                metrics[metric_name] = float(np.array(self.metrics[metric_name]).mean())
+
+        return metrics
 
     def log(self):
         """logging using mlflow - is done AFTER all runs are finished"""
@@ -101,7 +103,6 @@ class GridRunner:
 
         with mlflow.start_run():
             mlflow.log_param("experiment_name", self.experiment_name)
-            mlflow.log_param("objective_name", self.objective_name)
             mlflow.log_param("max_trials", self.max_trials)
             # mlflow.log_param("seed", self.seed)
             # mlflow.log_param("tracking_uri", self.tracking_uri)
@@ -112,13 +113,10 @@ class GridRunner:
             for k, v in vars(self.args).items():
                 mlflow.log_param("args/" + k, value(v))
 
-            for i in range(len(self.metrics)):
-                mlflow.log_metric(self.objective_name, self.metrics[i], step=i)
+            for metric_name in self.track_metrics:
+                if metric_name in self.metrics:
+                    for i in range(len(self.metrics[metric_name])):
+                        mlflow.log_metric(metric_name, self.metrics[metric_name][i], step=i)
 
-                if i > 0:
-                    mlflow.log_metric(self.objective_name + "/mean_running", np.array(self.metrics[:i]).mean(), step=i)
-                    mlflow.log_metric(self.objective_name + "/std_running", np.array(self.metrics[:i]).std(), step=i)
-
-            mlflow.log_metric(self.objective_name + "/mean", np.array(self.metrics).mean())
-            mlflow.log_metric(self.objective_name + "/std", np.array(self.metrics).std())
-
+                    mlflow.log_metric(metric_name + "/mean", np.array(self.metrics[metric_name]).mean())
+                    mlflow.log_metric(metric_name + "/std", np.array(self.metrics[metric_name]).std())
