@@ -1,3 +1,4 @@
+import itertools
 import json
 import multiprocessing
 import os
@@ -5,14 +6,16 @@ import sys
 import tempfile
 from argparse import Namespace, ArgumentParser
 from pathlib import Path, PurePosixPath
+from timeit import default_timer as timer
 from typing import Optional, List, Dict, Union, Tuple
 
+import captum.attr as ca
 import numpy as np
 import torch
-from captum.attr import IntegratedGradients
 from mlflow.tracking import MlflowClient
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import MLFlowLogger
+from torch import nn
 from torch.utils.data import DataLoader
 
 from baseline.rf import RandomForest
@@ -21,37 +24,187 @@ from datasets.featurizer import calculate_ranking_scores
 from tabnet_lightning import TabNetClassifier
 
 
-class TabNetCaptum():
-    def __init__(self, model: TabNetClassifier, target: int = 0, internal_batch_size: int = 128) -> None:
+class TabNetCaptum:
+    def __init__(self, model: TabNetClassifier, target: int = 0, device: str = "cuda") -> None:
         super().__init__()
 
         self.model = model
         self.target = target
-        self.internal_batch_size = internal_batch_size
+        self.device = torch.device(device)
 
-    def integrated_gradients(self, data_loader, postprocess: str = "none", **kwargs) -> np.ndarray:
-        def _forward(_inputs):
-            _logits, _probs, *_ = self.model(_inputs)
+        self.model.to(self.device)
+        self.model.eval()
 
-            if _logits.ndim > 1:
-                _logits = _logits[:, self.target]
+        class _Model(nn.Module):
+            def __init__(_self, model, target):
+                super().__init__()
 
-            return _logits.reshape(len(_inputs), -1)
+                _self.model = model
+                _self.target = target
 
-        ig = IntegratedGradients(_forward)
+            def forward(_self, _inputs):
+                return self._forward(_inputs)
 
+        self._model = _Model(self.model, self.target)
+
+    def _forward(self, _inputs):
+        """forward wrapper - takes care of target handling"""
+        _logits, *_ = self.model(_inputs)
+
+        if _logits.ndim > 1:
+            _logits = _logits[:, self.target]
+
+        return _logits.reshape(len(_inputs), -1)
+
+    def _inputs(self, data_loader: DataLoader) -> torch.Tensor:
+        """prepare inputs"""
         inputs, _ = next(iter(data_loader))
 
         inputs = inputs.reshape(len(inputs), -1) if inputs.ndim == 1 else inputs
         inputs.requires_grad_(True)
 
-        attributions = ig.attribute(inputs, target=self.target, internal_batch_size=len(inputs), **kwargs)
+        return inputs.to(self.device)
+
+    def integrated_gradients(self, data_loader, **method_kwargs) -> np.ndarray:
+        method = ca.IntegratedGradients(self._forward)
+
+        inputs = self._inputs(data_loader)
+
+        start = timer()
+        print("integrated gradients start")
+        attributions = method.attribute(inputs, target=0, internal_batch_size=len(inputs), **method_kwargs)
+        print(f"integrated gradients runtime: {timer() - start} sec")
+
         attributions = attributions.detach().cpu().numpy()
 
-        if postprocess == "normalize":
-            attributions = _normalize(attributions)
+        return attributions
+
+    def noise_tunnel_ig(self, data_loader, **method_kwargs) -> np.ndarray:
+        """noise tunnel for integrated gradients - https://captum.ai/api/noise_tunnel.html"""
+
+        ig = ca.IntegratedGradients(self._forward)
+        method = ca.NoiseTunnel(ig)
+
+        inputs = self._inputs(data_loader)
+
+        start = timer()
+        print("noise tunnel integrated gradients start")
+        attributions = method.attribute(inputs, target=0, internal_batch_size=len(inputs), **method_kwargs)
+        print(f"noise tunnel integrated gradients runtime: {timer() - start} sec")
+
+        attributions = attributions.detach().cpu().numpy()
 
         return attributions
+
+    def saliency(self, data_loader, **method_kwargs) -> np.ndarray:
+        """saliency - https://captum.ai/docs/algorithms#saliency"""
+
+        method = ca.Saliency(self._forward)
+
+        start = timer()
+        print("saliency start")
+        attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
+        print(f"saliency runtime: {timer() - start} sec")
+
+        attributions = attributions.detach().cpu().numpy()
+
+        return attributions
+
+    def input_x_gradient(self, data_loader, **method_kwargs) -> np.ndarray:
+        """input times gradient - https://captum.ai/docs/algorithms#input_x_gradient"""
+
+        method = ca.InputXGradient(self._forward)
+
+        start = timer()
+        print("input_x_gradient start")
+        attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
+        print(f"input_x_gradient runtime: {timer() - start} sec")
+
+        attributions = attributions.detach().cpu().numpy()
+
+        return attributions
+
+    def occlusion(self, data_loader, **method_kwargs) -> np.ndarray:
+        """occlusion - https://captum.ai/docs/algorithms#occlusion"""
+
+        method = ca.Occlusion(self._forward)
+
+        start = timer()
+        print("occlusion start")
+        attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
+        print(f"occlusion runtime: {timer() - start} sec")
+
+        attributions = attributions.detach().cpu().numpy()
+
+        return attributions
+
+    def shapley_value_sampling(self, data_loader, **method_kwargs) -> np.ndarray:
+        """shapley value sampling - https://captum.ai/docs/algorithms#shapley_value_sampling"""
+
+        method = ca.ShapleyValueSampling(self._forward)
+
+        start = timer()
+        print("shapley_value_sampling start")
+        attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
+        print(f"shapley_value_sampling runtime: {timer() - start} sec")
+
+        attributions = attributions.detach().cpu().numpy()
+
+        return attributions
+
+    def permutation(self, data_loader, **method_kwargs) -> np.ndarray:
+        """occlusion - https://captum.ai/docs/algorithms#shapley_value_sampling"""
+
+        method = ca.FeaturePermutation(self._forward)
+
+        start = timer()
+        print("permutation start")
+        attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
+        print(f"permutation runtime: {timer() - start} sec")
+
+        attributions = attributions.detach().cpu().numpy()
+
+        return attributions
+
+    # def lrp(self, data_loader, **method_kwargs) -> np.ndarray:
+    #     """lrp - https://captum.ai/docs/algorithms#lrp - not working identity is not supported by captum"""
+    #
+    #     method = ca.LRP(self._model)
+    #
+    #     start = timer()
+    #     print("lrp start")
+    #     attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
+    #     print(f"lrp runtime: {timer() - start} sec")
+    #
+    #     attributions = attributions.detach().cpu().numpy()
+    #
+    #     return attributions
+
+    # def deep_lift(self, data_loader, multiply_by_inputs: bool = True, **method_kwargs) -> np.ndarray:
+    #     """
+    #     deep lift - https://captum.ai/api/deep_lift.html
+    #
+    #     not working atm due to captum limitation with parameter sharing networks
+    #
+    #     Args:
+    #         data_loader ():
+    #         multiply_by_inputs ():
+    #         **method_kwargs ():
+    #
+    #     Returns:
+    #
+    #     """
+    #
+    #     method = ca.DeepLift(self._model, multiply_by_inputs=multiply_by_inputs)
+    #
+    #     start = timer()
+    #     print("deep lift start")
+    #     attributions = method.attribute(self._inputs(data_loader), target=self.target, **method_kwargs)
+    #     print(f"deep lift runtime: {timer() - start} sec")
+    #
+    #     attributions = attributions.detach().cpu().numpy()
+    #
+    #     return attributions
 
 
 class Attributor:
@@ -62,9 +215,10 @@ class Attributor:
     def __init__(self,
                  model: Union[TabNetClassifier, RandomForest],
                  dm: HERGClassifierDataModule,
+                 methods: List[Dict],
                  logger: Optional[MLFlowLogger] = None,
                  track_metrics: Optional[List[str]] = None,
-                 types: Optional[List[str]] = None,
+                 data_types: Optional[List[str]] = None,
                  label: str = "active_g10",
                  label_idx: int = 0,
                  references: Union[List[str], List[Tuple[str, int]]] = None,
@@ -72,27 +226,32 @@ class Attributor:
                  out_fname: str = None,
                  nr_samples: Optional[int] = None,
                  threshold: Optional[float] = None,
-                 model_attribution_kwargs: Optional[Dict] = None,
+                 device: str = "cuda",
                  ):
         super(Attributor, self).__init__()
 
-        self.types = ["test"] if types is None else types
-        self.model = model
+        self.data_types = ["test"] if data_types is None else data_types
+        self.methods = methods
+
         self.dm = dm
         self.logger = logger
         self.track_metrics = track_metrics
-        self.types = types
+
         self.label = label
         self.label_idx = label_idx
         self.references = [(rs, ra) for rs, ra in zip(*Hergophores.get())] if references is None else references
         self.out_dir = out_dir
         self.out_fname = out_fname
         self.nr_samples = nr_samples
-        self.model_attribution_kwargs = model_attribution_kwargs if model_attribution_kwargs is not None else {}
 
-        self.threshold = self._determine_treshold(.5) if threshold is None else threshold
+        self.model = model
+        self.device = torch.device(device)
+        self.model.eval()
+        self.model.to(self.device)
 
-    def _determine_treshold_tabnet(self, threshold_default: float = .5) -> float:
+        self.threshold = self._determine_threshold(.5) if threshold is None else threshold
+
+    def _determine_threshold_tabnet(self, threshold_default: float = .5) -> float:
         metrics = Trainer().test(model=self.model, test_dataloaders=self.dm.train_dataloader())
 
         key = "test/threshold-t" + str(self.label_idx)
@@ -101,7 +260,7 @@ class Attributor:
         else:
             return threshold_default
 
-    def _determine_treshold_rf(self, threshold_default: float = .5) -> float:
+    def _determine_threshold_rf(self, threshold_default: float = .5) -> float:
         metrics = self.model.test(self.dm.train_dataloader(), stage="test", log=False)
 
         key = "test/threshold-t" + str(self.label_idx)
@@ -110,20 +269,21 @@ class Attributor:
         else:
             return threshold_default
 
-    def _determine_treshold(self, threshold_default: float = .5) -> float:
+    def _determine_threshold(self, threshold_default: float = .5) -> float:
         if isinstance(self.model, TabNetClassifier):
-            return self._determine_treshold_tabnet(threshold_default)
+            return self._determine_threshold_tabnet(threshold_default)
         elif isinstance(self.model, RandomForest):
-            self._determine_treshold_rf(threshold_default)
+            self._determine_threshold_rf(threshold_default)
         else:
             return threshold_default
 
-    def _attribution_tabnet(self, data_loader: DataLoader, type: str = "tabnet", **kwargs) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _attribution_tabnet(self, data_loader: DataLoader, method: str = "default", **method_kwargs) -> Tuple[
+        np.ndarray, np.ndarray, np.ndarray]:
         """gets the tabnet attribution using the defined data_loader"""
 
         attribution, probs = [], []
-        for batch in data_loader:
-            _, _probs, _, _mask, *_ = self.model(*batch)
+        for inputs, labels in data_loader:
+            _, _probs, _, _mask, *_ = self.model(inputs.to(self.device))
 
             attribution.append(_mask)
             probs.append(_probs)
@@ -135,48 +295,65 @@ class Attributor:
 
         preds = preds[:, self.label_idx] if preds.ndim > 1 else preds
 
-        if type == "integrated_gradients":
-            attribution = TabNetCaptum(self.model).integrated_gradients(data_loader, **kwargs)
+        postprocess = method_kwargs.pop("postprocess", None)
 
-        return attribution, preds, probs.detach().cpu().numpy()
+        if method == "default":
+            # default refers to tabnet mask
+            attributions = attribution
+        elif method == "integrated_gradients":
+            attributions = TabNetCaptum(self.model).integrated_gradients(data_loader, **method_kwargs)
+        elif method == "noise_tunnel_ig":
+            attributions = TabNetCaptum(self.model).noise_tunnel_ig(data_loader, **method_kwargs)
+        elif method == "saliency":
+            attributions = TabNetCaptum(self.model).saliency(data_loader, **method_kwargs)
+        elif method == "input_x_gradient":
+            attributions = TabNetCaptum(self.model).input_x_gradient(data_loader, **method_kwargs)
+        elif method == "occlusion":
+            attributions = TabNetCaptum(self.model).occlusion(data_loader, **method_kwargs)
+        elif method == "shapley_value_sampling":
+            attributions = TabNetCaptum(self.model).shapley_value_sampling(data_loader, **method_kwargs)
+        elif method == "permutation":
+            attributions = TabNetCaptum(self.model).permutation(data_loader, **method_kwargs)
+        else:
+            raise ValueError(f"unknown attribution method {method}")
 
-    def _attribution_rf(self, data_loader: DataLoader, type: str = "global", postprocess: str = "none", **kwargs) -> Tuple[
+        attributions = _postprocess(attributions, postprocess)
+
+        return attributions, preds, probs.detach().cpu().numpy()
+
+    def _attribution_rf(self, data_loader: DataLoader, method: str = "default", **method_kwargs) -> Tuple[
         np.ndarray, np.ndarray, np.ndarray]:
 
         preds, probs = self.model.predict(data_loader)
 
-        if type == "treeinterpreter":
-            attribution = self.model.contributions(data_loader)
-            indices = np.expand_dims(preds, axis=(1, 2))
-            attribution = np.take_along_axis(attribution, indices, axis=2).squeeze()
-        elif type == "permutation":
-            attribution = self.model.contributions_global_permutation(data_loader, **kwargs)
-        elif type == "global":
-            attribution = self.model.contributions_global(data_loader)
-        else:
-            raise ValueError(f"unknown type {type}")
+        postprocess = method_kwargs.pop("postprocess", None)
 
-        if postprocess == "normalize":
-            attribution = _normalize(attribution)
-        elif postprocess == "positive":
-            attribution[attribution < .0] = .0
-        elif postprocess == "relative":
-            attribution[attribution > .0] += attribution[attribution > .0] * 2
-            attribution[attribution < .0] *= -1
+        if method == "default":
+            attributions = self.model.contributions_global(data_loader)
+        elif method == "treeinterpreter":
+            attributions = self.model.contributions(data_loader)
+            indices = np.expand_dims(preds, axis=(1, 2))
+            attributions = np.take_along_axis(attributions, indices, axis=2).squeeze()
+        elif method == "permutation":
+            attributions = self.model.contributions_global_permutation(data_loader, **method_kwargs)
+        else:
+            raise ValueError(f"unknown type {method}")
+
+        attributions = _postprocess(attributions, postprocess)
 
         pos_probs = probs[:, -1]
 
-        return attribution, preds, pos_probs
+        return attributions, preds, pos_probs
 
-    def _attribution(self, data_loader: DataLoader) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _attribution(self, data_loader: DataLoader, method: str, **method_kwargs) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         if isinstance(self.model, TabNetClassifier):
-            return self._attribution_tabnet(data_loader, **self.model_attribution_kwargs)
+            return self._attribution_tabnet(data_loader, method=method, **method_kwargs)
         elif isinstance(self.model, RandomForest):
-            return self._attribution_rf(data_loader, **self.model_attribution_kwargs)
+            return self._attribution_rf(data_loader, method=method, **method_kwargs)
         else:
             raise ValueError(f"model type is not supported {type(self.model)}")
 
-    def _attribute(self, type: str) -> Tuple[Dict, List[Dict], str, str]:
+    def _attribute(self, data_type: str, method: str, **method_kwargs) -> Tuple[Dict, List[Dict], str, str]:
 
         def _filter_mappings(featurizer_atomic_mappings, indices):
             featurizer_atomic_mappings_filtered = []
@@ -186,21 +363,21 @@ class Attributor:
             return featurizer_atomic_mappings_filtered
 
         featurizer_atomic_mappings = None
-        if type == "train":
+        if data_type == "train":
             data_loader = self.dm.train_dataloader()
             data = self.dm.data.iloc[self.dm.train_indices]
 
             if self.dm.featurizer_atomic_mappings is not None:
                 featurizer_atomic_mappings = _filter_mappings(self.dm.featurizer_atomic_mappings, self.dm.train_indices)
 
-        elif type == "val":
+        elif data_type == "val":
             data_loader = self.dm.val_dataloader()
             data = self.dm.data.iloc[self.dm.val_indices]
 
             if self.dm.featurizer_atomic_mappings is not None:
                 featurizer_atomic_mappings = _filter_mappings(self.dm.featurizer_atomic_mappings, self.dm.val_indices)
 
-        elif type == "test":
+        elif data_type == "test":
             data_loader = self.dm.test_dataloader()
             data = self.dm.data.iloc[self.dm.test_indices]
 
@@ -208,12 +385,12 @@ class Attributor:
                 featurizer_atomic_mappings = _filter_mappings(self.dm.featurizer_atomic_mappings, self.dm.test_indices)
 
         else:
-            raise ValueError(f"unknown data type {type}")
+            raise ValueError(f"unknown data type {data_type}")
 
         smiles = data["smiles"].tolist()
         labels = data[self.label].tolist()
 
-        attribution, preds, _ = self._attribution(data_loader)
+        attribution, preds, _ = self._attribution(data_loader, method=method, **method_kwargs)
         labels = np.array(labels)
 
         if self.nr_samples:
@@ -238,7 +415,7 @@ class Attributor:
             preds=preds,
         )
 
-        out_fname = type + "_dataset" if not self.out_fname else self.out_fname
+        out_fname = method + "-" + data_type + "_dataset" if not self.out_fname else self.out_fname
         out_name = self.out_dir + out_fname + "-" + "attribution_details-" + self.label
 
         out_path_df = out_name + ".tsv"
@@ -257,8 +434,11 @@ class Attributor:
         value = lambda v: v if len(str(v)) <= 250 else "...value too long for mlflow - not inserted"
 
         metrics = {}
-        for t in self.types:
-            result, reference_results, out_path_df, out_path_results = self._attribute(type=t)
+        for t, m in itertools.product(self.data_types, self.methods):
+            method_name = next(iter(m))
+            method_kwargs = m[method_name] if m[method_name] is not None else {}
+
+            result, reference_results, out_path_df, out_path_results = self._attribute(data_type=t, method=method_name, **method_kwargs)
 
             if self.logger:
                 self.logger.experiment.log_artifact(run_id=self.logger._run_id, local_path=out_path_results)
@@ -276,6 +456,7 @@ class Attributor:
 
                 for k, v in reference_result_values.items():
                     key = t + "/" + "smile" + str(i) + "/" + k
+                    key = key + "/" + method_name if method_name != "default" else key
 
                     if key in self.track_metrics and self.logger:
                         self.logger.experiment.log_metric(run_id=self.logger._run_id, key=key, value=v)
@@ -284,6 +465,8 @@ class Attributor:
 
             for k, v in result.items():
                 key = t + "/" + k
+                key = key + "/" + method_name if method_name != "default" else key
+
                 if key in self.track_metrics and self.logger:
                     self.logger.experiment.log_metric(run_id=self.logger._run_id, key=key, value=v)
 
@@ -299,6 +482,18 @@ def _normalize(data: np.ndarray) -> np.ndarray:
     data = (data - _min) / (_max - _min)
 
     return data
+
+
+def _postprocess(attributions: np.ndarray, postprocess: Optional[str] = None) -> np.ndarray:
+    if postprocess == "normalize":
+        attributions = _normalize(attributions)
+    elif postprocess == "positive":
+        attributions[attributions < .0] = .0
+    elif postprocess == "relative":
+        attributions[attributions > .0] += attributions[attributions > .0] * 2
+        attributions[attributions < .0] *= -1
+
+    return attributions
 
 
 def attribution_fn(args: Namespace):
@@ -351,37 +546,66 @@ def manual_args(args: Namespace) -> Namespace:
 
     args.track_metrics = []
     args.track_metrics += [
-        "test/mean/avg_score_pred_active",
+        # "test/mean/avg_score_pred_active",
         "test/mean/avg_score_pred_inactive",
+        "integrated_gradients/test/mean/avg_score_pred_inactive",
     ]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
 
     # attribution params
     args.attribution_kwargs = {
-        "types": ["test"],
+        "data_types": ["test"],
+        "methods": [
+            {"default": {
+                "postprocess": None
+            }},
+            {"integrated_gradients": {
+                "postprocess": None
+            }},
+            {"saliency": {
+                "postprocess": None,
+                "abs": False,  # Returns absolute value of gradients if set to True
+            }},
+            {"input_x_gradient": {
+                "postprocess": None
+            }},
+            # {"occlusion": {
+            #     "sliding_window_shapes": (1,),
+            #     "perturbations_per_eval": 1,
+            #     "show_progress": True,
+            #     "postprocess": None
+            # }},
+            # {"shapley_value_sampling": {
+            #     "n_samples": 10,  # The number of feature permutations tested
+            #     "perturbations_per_eval": 1,
+            #     "show_progress": True,  # takes around 30-40 min for default args
+            #     "postprocess": None
+            # }},
+            # {"permutation": {
+            #     "perturbations_per_eval": 1,
+            #     "show_progress": True,  # takes around 30-40 min for default args
+            #     "postprocess": None
+            # }},
+            # {"noise_tunnel_ig": {
+            #     "postprocess": None
+            # }}
+        ],
         "track_metrics": args.track_metrics,
-        # "label": "active_g100",
-        # "label_idx": 5,
         "label": "active_g10",
         "label_idx": 0,
         "threshold": 0.5,
-        "references": [(rs, ra) for rs, ra in zip(*Hergophores.get(Hergophores.ACTIVES_UNIQUE, by_activity=1))],
-        "model_attribution_kwargs": {
-            "type": "integrated_gradients",
-        }
+        "references": Hergophores.ACTIVES_UNIQUE_,
+
         # "nr_samples": 100,
     }
     # ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
 
     # logger/plot params
-    args.experiment_name = "herg_tn_opt3"
-    args.experiment_id = "177"
-    # args.run_id = "0b563814b1c74588b4dbc4653d1f943b"
-    args.run_id = "1c6e0a9892c4438e8772c61a4116ae5e"
-    # args.run_id = "c244505250e24ba889c8a144488b926d"
-    # args.run_id = "4e9cbbcdb36f4691a34af0ecfc1b94ca"
-    # args.run_id = "b12fbb9514444737b9e37cab856514ec"
+    args.experiment_name = "herg_tn_attr1"
+    args.experiment_id = "190"
+    args.run_id = "f2abb80eda84417593a67a535402eb72"
+
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
 
     p = list(Path(PurePosixPath("./" + args.experiment_id + "/" + args.run_id + "/checkpoints/")).glob("**/*.ckpt"))[0]
