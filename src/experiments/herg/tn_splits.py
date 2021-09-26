@@ -2,6 +2,8 @@ import os
 import sys
 from argparse import Namespace, ArgumentParser
 
+import numpy as np
+
 from datasets import Hergophores
 from experiments.grid_runner import GridRunner
 from experiments.kfold import Kfold
@@ -50,9 +52,7 @@ def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
     # grid runner args
     args.max_trials = 9999999
-    args.grid_space = {
-        "seed": [159, 753, 951, 456, 852, 789, 123, 147, 258, 369]
-    }
+
     args.track_metrics = [
         "val/AUROC",
         "val/Accuracy",
@@ -60,34 +60,57 @@ def manual_args(args: Namespace) -> Namespace:
         "test/Accuracy",
     ]
     args.track_metrics += [
-        # "test/mean/avg_score_label_active",
-        # "test/mean/avg_score_true_active",
+        # "test/mean/avg_score_pred_active",
         "test/mean/avg_score_pred_inactive",
-        # "test/mean/avg_score_true_inactive",
+        "test/mean/avg_score_pred_inactive/integrated_gradients",
+        "test/mean/avg_score_pred_inactive/saliency",
+        "test/mean/avg_score_pred_inactive/input_x_gradient",
     ]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
 
     # attribution options
     args.attribution_kwargs = {
-        "types": ["test"],
+        "data_types": ["test"],
+        "methods": [
+            {"default": {
+                "postprocess": None
+            }},
+            {"integrated_gradients": {
+                "postprocess": None
+            }},
+            {"saliency": {
+                "postprocess": None,
+                "abs": False,  # Returns absolute value of gradients if set to True
+            }},
+            {"input_x_gradient": {
+                "postprocess": None
+            }},
+        ],
         "track_metrics": args.track_metrics,
-        # "label": "active_g100",
-        # "label_idx": 5,
         "label": "active_g10",
         "label_idx": 0,
-        "references": [(rs, ra) for rs, ra in zip(*Hergophores.get(Hergophores.ACTIVES_UNIQUE, by_activity=1))]
+        "references": Hergophores.ACTIVES_UNIQUE_,
         # "nr_samples": 100,
     }
 
+    # seeds
+    args.seed = 0
+    args.split_seed = 1
+
+    args.grid_space = {
+        "seed": np.random.default_rng(args.seed).integers(2 ** 32 - 1, size=(20,)).tolist(),
+        # "split_seed": np.random.default_rng(args.seed + 1).integers(2 ** 32 - 1, size=(10,)).tolist(),
+        #"seed": [159, 753, 951, 456, 852, 789, 123, 147, 258, 369]
+    }
+
     # trainer/logging args
-    args.experiment_name = "herg_tn_diff_seeds2"
+    args.experiment_name = "herg_tn_diff_seed3"
     args.objective_name = "val/AUROC"
     args.minimize = False
-    args.run_name = "seeds"
+    args.run_name = "diff_seeds2"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
-    args.seed = 1138
     args.patience = 10
     args.stochastic_weight_avg = True
 
@@ -97,7 +120,6 @@ def manual_args(args: Namespace) -> Namespace:
     # args.split_size = (5, 0, 1)
     args.split_type = "random"
     args.split_size = (0.6, 0.2, 0.2)
-    args.split_seed = 1138
     # args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
     args.use_labels = ["active_g10"]
 

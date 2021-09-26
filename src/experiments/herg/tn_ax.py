@@ -61,17 +61,6 @@ def manual_args(args: Namespace) -> Namespace:
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
 
-    # attribution options
-    # args.attribution_kwargs = {
-    #     "types": ["test"],
-    #     "track_metrics": args.track_metrics,
-    #     # "label": "active_g100",
-    #     # "label_idx": 5,
-    #     "label": "active_g10",
-    #     "label_idx": 0,
-    #     "references": [(rs, ra) for rs, ra in zip(*Hergophores.get(Hergophores.ACTIVES_UNIQUE, by_activity=1))]
-    #     # "nr_samples": 100,
-    # }
     args.attribution_kwargs = None
 
     # ax args
@@ -84,7 +73,7 @@ def manual_args(args: Namespace) -> Namespace:
 
         {"name": "decision_size", "type": "choice", "values": [8, 16, 32, 64, 128]},
         {"name": "nr_steps", "type": "range", "bounds": [3, 10]},
-        #{"name": "gamma", "type": "choice", "values": [1.0, 1.2, 1.5, 2.0]},
+        # {"name": "gamma", "type": "choice", "values": [1.0, 1.2, 1.5, 2.0]},
         {"name": "lambda_sparse", "type": "choice", "values": [0.0, 1e-6, 1e-4, 1e-3, 0.01, 0.1]},
 
         # {"name": "virtual_batch_size", "type": "choice", "values": [32, 64, 256]},
