@@ -72,6 +72,14 @@ class Hergophores:
         "c1ccccc1Cc1ccccc1"
     ]
 
+    ACTIVES_UNIQUE_ = [
+        ("CCOc1ccccc1", 1),
+        ("c1ccccc1CNCC", 1),
+        ("c1ccccc1CCNC", 1),
+        ("c1ccccc1CN2CCCCC2", 1),
+        ("c1ccccc1Cc1ccccc1", 1),
+    ]
+
     INACTIVES_UNIQUE = [
         "n1ccccc1",
         "COc1ccccc1",
