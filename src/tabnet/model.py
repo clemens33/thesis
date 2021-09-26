@@ -18,7 +18,7 @@ class TabNet(nn.Module):
                  nr_steps: int = 1,
                  gamma: float = 1.0,
                  eps: float = 1e-5,
-                 momentum: float = 0.1,
+                 momentum: float = 0.01,
                  normalize_input: bool = True,
                  #
                  attentive_type: str = "sparsemax",
@@ -43,11 +43,8 @@ class TabNet(nn.Module):
                 FeatureLayer.init_layer(input_size=feature_size, feature_size=feature_size, **kwargs)
                 for _ in range(1, nr_shared_layers)]
 
-        if normalize_input:
-            # use ghost batch norm with large virtual batch size - this applies the custom default batch normalization supporting 3D inputs
-            self.bn = GhostBatchNorm1d(input_size=input_size, momentum=momentum, virtual_batch_size=torch.iinfo(int).max)
-        else:
-            self.bn = nn.Identity()
+        self.bn_input = GhostBatchNorm1d(input_size=input_size, momentum=momentum,
+                                         virtual_batch_size=torch.iinfo(int).max) if normalize_input else None
 
         self.feature_transformer = FeatureTransformer(input_size=input_size, feature_size=feature_size, nr_layers=nr_layers,
                                                       shared_layers=shared_layers, momentum=momentum, **kwargs)
@@ -76,7 +73,7 @@ class TabNet(nn.Module):
                                                                                           Tuple[
                                                                                               torch.Tensor, torch.Tensor, torch.Tensor]]:
 
-        input = self.bn(input)
+        input = self.bn_input(input) if self.bn_input is not None else input
         feature = self.feature_transformer(input)
 
         decisions, masks = [], []
@@ -98,8 +95,11 @@ class TabNet(nn.Module):
             masks_aggregated = mask * scale_mask if masks_aggregated is None else masks_aggregated + mask * scale_mask
 
             # calculate total entropy
+            # _entropy = torch.mean(torch.sum(mask * torch.log(mask + self.eps), dim=-1), dim=-1)
             _entropy = torch.mean(torch.sum(-mask * torch.log(mask + self.eps), dim=-1), dim=-1) / len(self.steps)
             entropy_aggregated = _entropy if entropy_aggregated is None else entropy_aggregated + _entropy
+
+        # entropy_aggregated /= len(self.steps)
 
         if self.return_all:
             return decisions_aggregated, masks_aggregated, entropy_aggregated, decisions, masks
