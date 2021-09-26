@@ -20,7 +20,7 @@ class TestClassificationHead():
                                  # (1, 32, [2, 2, 2, 2], None),
                              ])
     def test_forward(self, batch_size, input_size, num_classes, class_weights):
-        from tabnet_lightning.classifier import ClassificationHead
+        from shared.utils import ClassificationHead
 
         inputs = torch.randn(size=(batch_size, input_size))
 

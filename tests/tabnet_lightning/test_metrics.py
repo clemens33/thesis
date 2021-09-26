@@ -50,7 +50,7 @@ class TestCustomAccuracy():
 
     ])
     def test_accuracy(self, preds, targets, ignore_index, expected_value):
-        from tabnet_lightning.metrics import CustomAccuracy
+        from shared.metrics import CustomAccuracy
 
         num_targets = targets.shape[-1] if targets.ndim > 1 else 1
         fn = CustomAccuracy(num_targets, ignore_index, return_verbose=False)
@@ -133,7 +133,7 @@ class TestCustomAUROC():
 
     ])
     def test_auroc(self, preds, targets, ignore_index, chunks):
-        from tabnet_lightning.metrics import CustomAUROC
+        from shared.metrics import CustomAUROC
         from sklearn.metrics import roc_auc_score
         import math
 
@@ -188,7 +188,7 @@ class TestThresholdMoving():
     ])
     def test_determine(self, preds, targets, expected_threshold):
 
-        from tabnet_lightning.metrics import ThresholdMoving
+        from shared.metrics import ThresholdMoving
 
         th = ThresholdMoving.determine(preds, targets)
 

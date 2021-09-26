@@ -8,12 +8,12 @@ from pytorch_lightning.loggers import LightningLoggerBase
 from pytorch_lightning.utilities import rank_zero_only
 
 
-class TabNetTrainer(Trainer):
+class CustomTrainer(Trainer):
     @staticmethod
     def add_argparse_args(parent_parser: ArgumentParser, **kwargs) -> ArgumentParser:
         parent_parser = Trainer.add_argparse_args(parent_parser, **kwargs)
 
-        parser = parent_parser.add_argument_group("TabNetTrainer")
+        parser = parent_parser.add_argument_group("CustomTrainer")
 
         # to be able to overwrite pl default trainer args
         for _ag in parser._action_groups:
@@ -52,5 +52,3 @@ class TabNetTrainer(Trainer):
         params = Namespace(**params)
 
         logger.log_hyperparams(params)
-
-

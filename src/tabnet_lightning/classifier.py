@@ -7,84 +7,11 @@ from torch.optim import AdamW, Optimizer, Adam
 from torch.optim.lr_scheduler import StepLR
 from torchmetrics import MetricCollection, Accuracy, AUROC
 
+from shared.utils import ClassificationHead, get_linear_schedule_with_warmup, get_exponential_decay_scheduler
 from tabnet import TabNet
-from tabnet_lightning.metrics import Sparsity, CustomAccuracy, CustomAUROC, postprocess_metric_output
-from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler, StackedEmbedding, MultiEmbedding, \
-    plot_masks, plot_rankings, determine_objective
-
-
-class ClassificationHead(nn.Module):
-    def __init__(self, input_size: int, num_classes: Union[int, List[int]], class_weights: Optional[List[float]] = None,
-                 ignore_index: int = -100):
-        super().__init__()
-
-        self.input_size = input_size
-        self.ignore_index = ignore_index
-
-        self.objective, self.num_classes, self.num_targets = determine_objective(num_classes)
-
-        class_weights = torch.Tensor(class_weights) if class_weights is not None else None
-        if self.objective == "binary":
-            self.classifier = nn.Linear(in_features=input_size, out_features=1)
-
-            pos_weight = None
-            if class_weights:
-                if len(class_weights) == 2:
-                    pos_weight = class_weights[1] / class_weights.sum()
-                elif len(class_weights) == 1:
-                    pos_weight = class_weights[0]
-                else:
-                    raise AttributeError(f"provided class weights {len(class_weights)} do not match binary classification objective")
-
-            self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-
-        elif self.objective == "multi-class":
-            self.classifier = nn.Linear(in_features=input_size, out_features=num_classes)
-
-            self.loss_fn = nn.CrossEntropyLoss(weight=class_weights, ignore_index=ignore_index)
-
-        elif self.objective == "binary-multi-target":
-            if class_weights:
-                if len(class_weights) != len(num_classes):
-                    raise AttributeError(
-                        f"length of provided class weights {len(class_weights)} does not match the provided number of classes {num_classes}")
-
-            self.classifier = nn.Linear(in_features=input_size, out_features=len(num_classes))
-
-            self.loss_fn = nn.BCEWithLogitsLoss(reduction="none", pos_weight=class_weights)
-
-    def forward(self, inputs: torch.Tensor, labels: Optional[torch.Tensor] = None) -> Tuple[
-        torch.Tensor, torch.Tensor, Union[None, torch.Tensor]]:
-
-        logits, probs, loss = None, None, None
-        if self.objective == "binary":
-            logits = self.classifier(inputs)
-
-            logits = logits.squeeze()
-            probs = torch.sigmoid(logits)
-
-            loss = self.loss_fn(logits, labels.float()) if labels is not None else None
-        elif self.objective == "multi-class":
-            logits = self.classifier(inputs)
-
-            probs = torch.softmax(logits, dim=-1)
-
-            loss = self.loss_fn(logits, labels) if labels is not None else None
-        elif self.objective == "binary-multi-target":
-            logits = self.classifier(inputs)
-            probs = torch.sigmoid(logits)
-
-            if labels is not None:
-                labels = labels.unsqueeze(dim=1) if labels.ndim == 1 else labels
-                mask = torch.where(labels == self.ignore_index, 0, 1)
-                labels = labels * mask
-
-                loss = self.loss_fn(logits, labels.float())
-
-                loss = loss * mask
-                loss = loss.mean()
-
-        return logits, probs, loss
+from shared.metrics import Sparsity, CustomAccuracy, CustomAUROC, postprocess_metric_output
+from tabnet_lightning.utils import StackedEmbedding, MultiEmbedding, \
+    plot_masks, plot_rankings
 
 
 class TabNetClassifier(pl.LightningModule):

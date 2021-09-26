@@ -6,13 +6,11 @@ import numpy as np
 import torch
 from pytorch_lightning.loggers import MLFlowLogger
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.inspection import permutation_importance
 from torch.utils.data import DataLoader
 from torchmetrics import MetricCollection, Accuracy, AUROC
-from treeinterpreter import treeinterpreter as ti
 
-from tabnet_lightning.metrics import CustomAccuracy, CustomAUROC, postprocess_metric_output
-from tabnet_lightning.utils import determine_objective
+from shared.metrics import CustomAccuracy, CustomAUROC, postprocess_metric_output
+from shared.utils import determine_objective
 
 
 class RandomForest:
@@ -143,113 +141,6 @@ class RandomForest:
         probs = self.model.predict_proba(X)
 
         return y_hat, probs
-
-    def contributions(self, data: Union[DataLoader, np.ndarray]) -> np.ndarray:
-        """
-        only supports single target classifier
-
-        using treeinterpreter - https://github.com/andosa/treeinterpreter
-
-        additional links:
-        - https://blog.datadive.net/random-forest-interpretation-conditional-feature-contributions/
-        - https://towardsdatascience.com/explaining-feature-importance-by-example-of-a-random-forest-d9166011959e
-
-        Args:
-            data ():
-
-        Returns:
-            Contributions in the form of (n_samples, n_features)
-
-        """
-        if self.num_targets > 1:
-            raise NotImplementedError(f"contribution for multi target classification not supported")
-
-        if isinstance(data, DataLoader):
-            if len(data) > 1:
-                raise NotImplementedError("mini batches not supported yet")
-
-            X, *_ = next(iter(data))
-            X = X.cpu().numpy()
-        else:
-            X = data
-
-        _, _, contributions = ti.predict(self.model, X, joint_contribution=False)
-        return contributions
-
-    def contributions_global_permutation(self, *data: Union[DataLoader, np.ndarray], n_repeats: int = 5) -> np.ndarray:
-        """
-        Calculates global contributions per feature using permutation
-
-        Refer to https://scikit-learn.org/stable/auto_examples/ensemble/plot_forest_importances.html for details.
-
-        Args:
-            *data ():
-
-        Returns:
-            Contributions in the form of (n_samples, n_features) - but contributions are the same for each sample (global)
-
-        """
-
-        if isinstance(data[0], DataLoader):
-            if len(data[0]) > 1:
-                raise NotImplementedError("mini batches not supported yet")
-
-            X, y = next(iter(data[0]))
-            X = X.cpu().numpy()
-            y = y.cpu().numpy()
-        else:
-            X, y = data
-
-        print(f"start contributions_global_permutation ...")
-
-        result = permutation_importance(
-            self.model, X, y, n_repeats=n_repeats, random_state=self.seed, n_jobs=self.n_jobs)
-
-        contributions = np.repeat(result.importances_mean[np.newaxis, :], len(X), axis=0)
-
-        return contributions
-
-    def contributions_global(self, *data: Union[DataLoader, np.ndarray]) -> np.ndarray:
-        """
-        Get global contributions per feature using impurity (default feature importance) - actually only considers the training data
-
-        Refer to https://scikit-learn.org/stable/auto_examples/ensemble/plot_forest_importances.html for details.
-
-        Args:
-            *data (): - is only used to determine output size (n_sampleS)
-
-        Returns:
-            Contributions in the form of (n_samples, n_features) - but contributions are the same for each sample (global)
-
-        """
-
-        if isinstance(data[0], DataLoader):
-            if len(data[0]) > 1:
-                raise NotImplementedError("mini batches not supported yet")
-
-            X, _ = next(iter(data[0]))
-            X = X.cpu().numpy()
-        else:
-            X, _ = data
-
-        contributions = self.model.feature_importances_
-
-        contributions = np.repeat(contributions[np.newaxis, :], len(X), axis=0)
-
-        return contributions
-
-    def contributions_lime(self, data: Union[DataLoader, np.ndarray]):
-        """
-
-        using lime - https://github.com/marcotcr/lime
-
-        Args:
-            data ():
-
-        Returns:
-
-        """
-        raise NotImplementedError(f"lime contribution not implemented yet")
 
     def _log_hyperparameters(self, ignore_param: List[str] = None, types: List = None):
         if self.logger:

@@ -48,7 +48,7 @@ class GhostBatchNorm1d(nn.Module):
 
 class _Round(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x: torch.Tensor, th: float) -> torch.Tensor: # noqa
+    def forward(ctx, x: torch.Tensor, th: float) -> torch.Tensor:  # noqa
         # x[x >= th] = 1
         # x[x < th] = 0
 
@@ -64,7 +64,7 @@ class _Round(torch.autograd.Function):
         return x
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor): # noqa
+    def backward(ctx, grad_output: torch.Tensor):  # noqa
         dth = None  # indeterminable
         dx = grad_output  # identity/pass through gradient
 
@@ -80,8 +80,6 @@ class Round1(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.round(x, self.th)
-
-
 
 
 class HardSigm1(nn.Module):
@@ -106,8 +104,6 @@ class HardSigm2(nn.Module):
 
         slope_trainable = (slope_type == "slope_trainable")
         self.slope = nn.Parameter(torch.scalar_tensor(slope), requires_grad=slope_trainable)
-
-
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         t = 0.5 * (self.slope * x + 1)

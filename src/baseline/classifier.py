@@ -7,59 +7,58 @@ from torch.optim import Optimizer, AdamW, Adam
 from torch.optim.lr_scheduler import StepLR
 from torchmetrics import MetricCollection, Accuracy, AUROC
 
-from tabnet_lightning.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler
+from shared.metrics import CustomAccuracy, CustomAUROC, postprocess_metric_output
+from shared.utils import get_linear_schedule_with_warmup, get_exponential_decay_scheduler, ClassificationHead
 
 
 class MLP(nn.Module):
     def __init__(self,
                  input_size: int,
                  hidden_size: Union[List[int], int],
-                 output_size: int,
                  dropout: float = 0.1,
                  activation: nn.Module = nn.ReLU(),
                  normalize_input: bool = False,
                  batch_norm: bool = False,
+                 momentum: float = 0.1,
                  **kwargs
                  ):
         super(MLP, self).__init__()
 
-        self.input_norm = nn.BatchNorm1d(input_size) if normalize_input else nn.Identity()
+        self.input_norm = nn.BatchNorm1d(input_size, momentum=momentum) if normalize_input else None
 
         hidden_sizes = [hidden_size] if isinstance(hidden_size, int) else hidden_size
 
         layers = []
         in_features = input_size
         for hidden_size in hidden_sizes:
-            layers.append(nn.Sequential(
-                nn.Linear(in_features=in_features, out_features=hidden_size),
-                activation,
-                nn.BatchNorm1d(hidden_size) if batch_norm else nn.Identity(),
-                nn.Dropout(p=dropout) if dropout > 0 else nn.Identity(),
-            ))
+            layer = [nn.Linear(in_features=in_features, out_features=hidden_size), activation]
+            layer += [nn.BatchNorm1d(hidden_size, momentum=momentum)] if batch_norm else []
+            layer += [nn.Dropout(p=dropout)] if dropout > 0 else []
+
+            layers.append(nn.Sequential(*layer))
 
             in_features = hidden_size
 
         self.layers = nn.ModuleList(layers)
 
-        self.out = nn.Linear(in_features=hidden_sizes[-1], out_features=output_size)
-
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        inputs = self.input_norm(inputs)
+        hidden_state = self.input_norm(inputs) if self.input_norm is not None else inputs
 
         for layer in self.layers:
-            inputs = layer(inputs)
+            hidden_state = layer(hidden_state)
 
-        output = self.out(inputs)
-
-        return output
+        return hidden_state
 
 
 class MLPClassifier(pl.LightningModule):
     def __init__(self,
                  input_size: int,
                  hidden_size: Union[List[int], int],
-                 num_classes: int,
+                 num_classes: Union[int, List[int]],
                  dropout: float = 0.1,
+                 batch_norm: bool = True,
+                 momentum: float = 0.1,
+                 ignore_index: int = -100,
                  #
                  categorical_indices: Optional[List[int]] = None,
                  categorical_size: Optional[List[int]] = None,
@@ -79,9 +78,13 @@ class MLPClassifier(pl.LightningModule):
         super(MLPClassifier, self).__init__()
 
         self.num_classes = num_classes
+        class_weights = torch.Tensor(class_weights) if class_weights is not None else None
 
-        output_size = 1 if num_classes == 2 else num_classes
-        self.classifier = MLP(input_size=input_size, hidden_size=hidden_size, output_size=output_size, dropout=dropout)
+        self.encoder = MLP(input_size=input_size, hidden_size=hidden_size, dropout=dropout, batch_norm=batch_norm, momentum=momentum)
+
+        output_size = hidden_size[-1] if isinstance(hidden_size, list) else hidden_size
+        self.classifier = ClassificationHead(input_size=output_size, num_classes=num_classes, class_weights=class_weights,
+                                             ignore_index=ignore_index)
 
         self.lr = lr
 
@@ -95,21 +98,16 @@ class MLPClassifier(pl.LightningModule):
         if self.categorical_indices is not None:
             self.embeddings = self._init_categorical_embeddings(categorical_size, embedding_dims)
 
-        class_weights = torch.Tensor(class_weights) if class_weights is not None else None
-
-        if num_classes == 2:
-            pos_weight = class_weights[1] / class_weights.sum() if class_weights is not None else None
-            self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-        else:
-            self.loss_fn = nn.CrossEntropyLoss(weight=class_weights)
-
-        metrics = MetricCollection([
-            # Accuracy(num_classes=num_classes),
-            # AUROC(num_classes=num_classes, average="macro"),
-            Accuracy() if num_classes == 2 else Accuracy(num_classes=num_classes),
-            AUROC() if num_classes == 2 else AUROC(num_classes=num_classes, average="macro"),
-            # TODO check -> leads to memory leak (atm fixed by calling reset in epoch end callbacks)
-        ])
+        metrics = MetricCollection(
+            [
+                CustomAccuracy(num_targets=self.classifier.num_targets, ignore_index=ignore_index),
+                CustomAUROC(num_targets=self.classifier.num_targets, ignore_index=ignore_index, return_verbose=True),
+            ]
+            if self.classifier.objective in ["binary-multi-target", "binary"] else [
+                Accuracy(),
+                AUROC(num_classes=self.classifier.num_classes)
+            ]
+        )
 
         self.train_metrics = metrics.clone(prefix="train/")
         self.val_metrics = metrics.clone(prefix="val/")
@@ -127,13 +125,14 @@ class MLPClassifier(pl.LightningModule):
             nn.Embedding(num_embeddings=size, embedding_dim=dim) for size, dim in zip(categorical_size, embedding_dims)
         ])
 
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+    def forward(self, inputs: torch.Tensor, labels: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.categorical_indices is not None:
             inputs = self._embeddings(inputs)
 
-        logits = self.classifier(inputs)
+        logits = self.encoder(inputs)
+        logits, probs, loss = self.classifier(logits, labels)
 
-        return logits
+        return logits, probs, loss
 
     def _embeddings(self, inputs: torch.Tensor) -> torch.Tensor:
         for idx, embedding in zip(self.categorical_indices, self.embeddings):
@@ -145,15 +144,7 @@ class MLPClassifier(pl.LightningModule):
         return inputs
 
     def _step(self, inputs: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        logits = self(inputs)
-
-        if self.num_classes == 2:
-            logits = logits.squeeze()
-            probs = torch.sigmoid(logits)
-        else:
-            probs = torch.softmax(logits, dim=-1)
-
-        loss = self.loss_fn(logits, labels.float() if self.num_classes == 2 else labels)
+        logits, probs, loss = self(inputs, labels)
 
         return loss, logits, probs, labels
 
@@ -163,7 +154,7 @@ class MLPClassifier(pl.LightningModule):
         self.log("train/loss", loss, prog_bar=True)
 
         output = self.train_metrics(probs, labels)
-        self.log_dict(output)
+        self.log_dict(postprocess_metric_output(output))
 
         return loss
 
@@ -176,7 +167,7 @@ class MLPClassifier(pl.LightningModule):
         self.log("val/loss", loss, prog_bar=True)
 
         output = self.val_metrics(probs, labels)
-        self.log_dict(output, prog_bar=True)
+        self.log_dict(postprocess_metric_output(output), prog_bar=False)
 
     def validation_epoch_end(self, outputs: List[Any]):
         self.val_metrics.reset()
@@ -187,7 +178,7 @@ class MLPClassifier(pl.LightningModule):
         self.log("test/loss", loss)
 
         output = self.test_metrics(probs, labels)
-        self.log_dict(output)
+        self.log_dict(postprocess_metric_output(output))
 
     def test_epoch_end(self, outputs: List[Any]):
         self.test_metrics.reset()
