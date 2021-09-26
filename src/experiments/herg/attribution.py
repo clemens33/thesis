@@ -6,7 +6,6 @@ import sys
 import tempfile
 from argparse import Namespace, ArgumentParser
 from pathlib import Path, PurePosixPath
-from timeit import default_timer as timer
 from typing import Optional, List, Dict, Union, Tuple
 
 import captum.attr as ca
@@ -15,17 +14,147 @@ import torch
 from mlflow.tracking import MlflowClient
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import MLFlowLogger
+from sklearn.inspection import permutation_importance
 from torch import nn
 from torch.utils.data import DataLoader
+from treeinterpreter import treeinterpreter
 
+from baseline import MLPClassifier
 from baseline.rf import RandomForest
 from datasets import HERGClassifierDataModule, Hergophores
 from datasets.featurizer import calculate_ranking_scores
 from tabnet_lightning import TabNetClassifier
+from shared.utils import time_it
 
 
-class TabNetCaptum:
-    def __init__(self, model: TabNetClassifier, target: int = 0, device: str = "cuda") -> None:
+class RFAttribution:
+    def __init__(self, rf: RandomForest) -> None:
+        super().__init__()
+
+        if rf.num_targets > 1:
+            raise NotImplementedError(f"Random forest attribution for more than one target not implemented.")
+
+        self.rf = rf
+
+    def _inputs(self, data_loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
+        if len(data_loader) > 1:
+            raise NotImplementedError("mini batches not supported yet")
+
+        X, y = next(iter(data_loader))
+        X = X.detach().cpu().numpy()
+        y = y.detach().cpu().numpy()
+
+        return X, y
+
+    @time_it
+    def treeinterpreter(self, data_loader: DataLoader) -> np.ndarray:
+        """
+        only supports single target classifier
+
+        using treeinterpreter - https://github.com/andosa/treeinterpreter
+
+        additional links:
+        - https://blog.datadive.net/random-forest-interpretation-conditional-feature-contributions/
+        - https://towardsdatascience.com/explaining-feature-importance-by-example-of-a-random-forest-d9166011959e
+
+        Args:
+            data_loader ():
+
+        Returns:
+            Contributions in the form of (n_samples, n_features, n_classes)
+
+        """
+        X, _ = self._inputs(data_loader)
+
+        _, _, contributions = treeinterpreter.predict(self.rf.model, X, joint_contribution=False)
+
+        return contributions
+
+    @time_it
+    def permutation(self, data_loader: DataLoader, **method_kwargs) -> np.ndarray:
+        """
+        Calculates global contributions per feature using permutation
+
+        Refer to https://scikit-learn.org/stable/auto_examples/ensemble/plot_forest_importances.html for details.
+
+        Args:
+            data_loader ():
+
+        Returns:
+            Contributions in the form of (n_samples, n_features) - but contributions are the same for each sample (global)
+
+        """
+
+        X, y = self._inputs(data_loader)
+
+        result = permutation_importance(
+            self.rf.model, X, y, random_state=self.rf.seed, n_jobs=self.rf.n_jobs, **method_kwargs)
+
+        # repeat n_samples along sample axis
+        contributions = np.repeat(result.importances_mean[np.newaxis, :], len(X), axis=0)
+
+        return contributions
+
+    def impurity(self, data_loader: DataLoader) -> np.ndarray:
+        """
+        Get global contributions per feature using impurity (default feature importance) - actually only considers the training data
+
+        Refer to https://scikit-learn.org/stable/auto_examples/ensemble/plot_forest_importances.html for details.
+
+        Args:
+            data_loader (): - is only used to determine output size (n_sampleS)
+
+        Returns:
+            Contributions in the form of (n_samples, n_features) - but contributions are the same for each sample (global)
+
+        """
+
+        X, _ = self._inputs(data_loader)
+
+        contributions = self.rf.model.feature_importances_
+
+        # repeat n_samples along sample axis
+        contributions = np.repeat(contributions[np.newaxis, :], len(X), axis=0)
+
+        return contributions
+
+    def input_x_impurity(self, data_loader: DataLoader) -> np.ndarray:
+        """
+        Using impurity feature importance values (based one training data) times input features (e.g. test set)
+
+        Args:
+            data_loader ():
+
+        Returns:
+            Contributions in the form of (n_samples, n_features) - but contributions are the same for each sample (global)
+
+        """
+
+        X, _ = self._inputs(data_loader)
+
+        contributions = self.rf.model.feature_importances_
+
+        contributions = np.repeat(contributions[np.newaxis, :], len(X), axis=0)
+        contributions = contributions * X
+
+        return contributions
+
+    def lime(self, data_loader: DataLoader, **method_kwargs) -> np.ndarray:
+        """
+
+        using lime - https://github.com/marcotcr/lime
+
+        Args:
+            data_loader ():
+
+        Returns:
+
+        """
+        raise NotImplementedError(f"lime contribution not implemented yet")
+
+
+class NNAttribution:
+    def __init__(self, model: Union[TabNetClassifier, MLPClassifier], target: int = 0, device: str = "cuda") -> None:
         super().__init__()
 
         self.model = model
@@ -65,20 +194,17 @@ class TabNetCaptum:
 
         return inputs.to(self.device)
 
+    @time_it
     def integrated_gradients(self, data_loader, **method_kwargs) -> np.ndarray:
         method = ca.IntegratedGradients(self._forward)
-
         inputs = self._inputs(data_loader)
 
-        start = timer()
-        print("integrated gradients start")
         attributions = method.attribute(inputs, target=0, internal_batch_size=len(inputs), **method_kwargs)
-        print(f"integrated gradients runtime: {timer() - start} sec")
-
         attributions = attributions.detach().cpu().numpy()
 
         return attributions
 
+    @time_it
     def noise_tunnel_ig(self, data_loader, **method_kwargs) -> np.ndarray:
         """noise tunnel for integrated gradients - https://captum.ai/api/noise_tunnel.html"""
 
@@ -87,81 +213,62 @@ class TabNetCaptum:
 
         inputs = self._inputs(data_loader)
 
-        start = timer()
-        print("noise tunnel integrated gradients start")
         attributions = method.attribute(inputs, target=0, internal_batch_size=len(inputs), **method_kwargs)
-        print(f"noise tunnel integrated gradients runtime: {timer() - start} sec")
-
         attributions = attributions.detach().cpu().numpy()
 
         return attributions
 
+    @time_it
     def saliency(self, data_loader, **method_kwargs) -> np.ndarray:
         """saliency - https://captum.ai/docs/algorithms#saliency"""
 
         method = ca.Saliency(self._forward)
 
-        start = timer()
-        print("saliency start")
         attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
-        print(f"saliency runtime: {timer() - start} sec")
-
         attributions = attributions.detach().cpu().numpy()
 
         return attributions
 
+    @time_it
     def input_x_gradient(self, data_loader, **method_kwargs) -> np.ndarray:
         """input times gradient - https://captum.ai/docs/algorithms#input_x_gradient"""
 
         method = ca.InputXGradient(self._forward)
 
-        start = timer()
-        print("input_x_gradient start")
         attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
-        print(f"input_x_gradient runtime: {timer() - start} sec")
-
         attributions = attributions.detach().cpu().numpy()
 
         return attributions
 
+    @time_it
     def occlusion(self, data_loader, **method_kwargs) -> np.ndarray:
         """occlusion - https://captum.ai/docs/algorithms#occlusion"""
 
         method = ca.Occlusion(self._forward)
 
-        start = timer()
-        print("occlusion start")
         attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
-        print(f"occlusion runtime: {timer() - start} sec")
-
         attributions = attributions.detach().cpu().numpy()
 
         return attributions
 
+    @time_it
     def shapley_value_sampling(self, data_loader, **method_kwargs) -> np.ndarray:
         """shapley value sampling - https://captum.ai/docs/algorithms#shapley_value_sampling"""
 
         method = ca.ShapleyValueSampling(self._forward)
 
-        start = timer()
-        print("shapley_value_sampling start")
         attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
-        print(f"shapley_value_sampling runtime: {timer() - start} sec")
-
         attributions = attributions.detach().cpu().numpy()
 
         return attributions
 
+    @time_it
     def permutation(self, data_loader, **method_kwargs) -> np.ndarray:
-        """occlusion - https://captum.ai/docs/algorithms#shapley_value_sampling"""
+        """permutation - https://captum.ai/docs/algorithms#permutation"""
 
         method = ca.FeaturePermutation(self._forward)
 
-        start = timer()
-        print("permutation start")
         attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
-        print(f"permutation runtime: {timer() - start} sec")
-
         attributions = attributions.detach().cpu().numpy()
 
         return attributions
@@ -207,13 +314,13 @@ class TabNetCaptum:
     #     return attributions
 
 
-class Attributor:
+class Attribution:
     """
     Simple wrapper class which handles the atomic attribution/weights calculation, atomic ranking and logging
     """
 
     def __init__(self,
-                 model: Union[TabNetClassifier, RandomForest],
+                 model: Union[TabNetClassifier, RandomForest, MLPClassifier],
                  dm: HERGClassifierDataModule,
                  methods: List[Dict],
                  logger: Optional[MLFlowLogger] = None,
@@ -228,7 +335,7 @@ class Attributor:
                  threshold: Optional[float] = None,
                  device: str = "cuda",
                  ):
-        super(Attributor, self).__init__()
+        super(Attribution, self).__init__()
 
         self.data_types = ["test"] if data_types is None else data_types
         self.methods = methods
@@ -245,13 +352,14 @@ class Attributor:
         self.nr_samples = nr_samples
 
         self.model = model
-        self.device = torch.device(device)
-        self.model.eval()
-        self.model.to(self.device)
+        if type(model) in [TabNetClassifier, MLPClassifier]:
+            self.device = torch.device(device)
+            self.model.eval()
+            self.model.to(self.device)
 
         self.threshold = self._determine_threshold(.5) if threshold is None else threshold
 
-    def _determine_threshold_tabnet(self, threshold_default: float = .5) -> float:
+    def _determine_threshold_nn(self, threshold_default: float = .5) -> float:
         metrics = Trainer().test(model=self.model, test_dataloaders=self.dm.train_dataloader())
 
         key = "test/threshold-t" + str(self.label_idx)
@@ -270,8 +378,8 @@ class Attributor:
             return threshold_default
 
     def _determine_threshold(self, threshold_default: float = .5) -> float:
-        if isinstance(self.model, TabNetClassifier):
-            return self._determine_threshold_tabnet(threshold_default)
+        if type(self.model) in [TabNetClassifier, MLPClassifier]:
+            return self._determine_threshold_nn(threshold_default)
         elif isinstance(self.model, RandomForest):
             self._determine_threshold_rf(threshold_default)
         else:
@@ -297,23 +405,23 @@ class Attributor:
 
         postprocess = method_kwargs.pop("postprocess", None)
 
-        if method == "default":
+        if method == "tabnet":
             # default refers to tabnet mask
             attributions = attribution
         elif method == "integrated_gradients":
-            attributions = TabNetCaptum(self.model).integrated_gradients(data_loader, **method_kwargs)
+            attributions = NNAttribution(self.model).integrated_gradients(data_loader, **method_kwargs)
         elif method == "noise_tunnel_ig":
-            attributions = TabNetCaptum(self.model).noise_tunnel_ig(data_loader, **method_kwargs)
-        elif method == "saliency":
-            attributions = TabNetCaptum(self.model).saliency(data_loader, **method_kwargs)
+            attributions = NNAttribution(self.model).noise_tunnel_ig(data_loader, **method_kwargs)
+        elif "saliency" in method:
+            attributions = NNAttribution(self.model).saliency(data_loader, **method_kwargs)
         elif method == "input_x_gradient":
-            attributions = TabNetCaptum(self.model).input_x_gradient(data_loader, **method_kwargs)
+            attributions = NNAttribution(self.model).input_x_gradient(data_loader, **method_kwargs)
         elif method == "occlusion":
-            attributions = TabNetCaptum(self.model).occlusion(data_loader, **method_kwargs)
+            attributions = NNAttribution(self.model).occlusion(data_loader, **method_kwargs)
         elif method == "shapley_value_sampling":
-            attributions = TabNetCaptum(self.model).shapley_value_sampling(data_loader, **method_kwargs)
+            attributions = NNAttribution(self.model).shapley_value_sampling(data_loader, **method_kwargs)
         elif method == "permutation":
-            attributions = TabNetCaptum(self.model).permutation(data_loader, **method_kwargs)
+            attributions = NNAttribution(self.model).permutation(data_loader, **method_kwargs)
         else:
             raise ValueError(f"unknown attribution method {method}")
 
@@ -328,14 +436,16 @@ class Attributor:
 
         postprocess = method_kwargs.pop("postprocess", None)
 
-        if method == "default":
-            attributions = self.model.contributions_global(data_loader)
+        if method == "impurity":
+            attributions = RFAttribution(self.model).impurity(data_loader)
         elif method == "treeinterpreter":
-            attributions = self.model.contributions(data_loader)
+            attributions = RFAttribution(self.model).treeinterpreter(data_loader, **method_kwargs)
             indices = np.expand_dims(preds, axis=(1, 2))
             attributions = np.take_along_axis(attributions, indices, axis=2).squeeze()
         elif method == "permutation":
-            attributions = self.model.contributions_global_permutation(data_loader, **method_kwargs)
+            attributions = RFAttribution(self.model).permutation(data_loader, **method_kwargs)
+        elif method == "input_x_impurity":
+            attributions = RFAttribution(self.model).input_x_impurity(data_loader)
         else:
             raise ValueError(f"unknown type {method}")
 
@@ -345,11 +455,52 @@ class Attributor:
 
         return attributions, preds, pos_probs
 
+    def _attribution_mlp(self, data_loader: DataLoader, method: str = "default", **method_kwargs) -> Tuple[
+        np.ndarray, np.ndarray, np.ndarray]:
+        """gets the tabnet attribution using the defined data_loader"""
+
+        probs = []
+        for inputs, labels in data_loader:
+            _, _probs, _ = self.model(inputs.to(self.device))
+
+            probs.append(_probs)
+
+        probs = torch.cat(probs)
+        preds = (probs > self.threshold).float()
+        preds = preds.detach().cpu().numpy()
+
+        preds = preds[:, self.label_idx] if preds.ndim > 1 else preds
+
+        postprocess = method_kwargs.pop("postprocess", None)
+
+        if method == "integrated_gradients":
+            attributions = NNAttribution(self.model).integrated_gradients(data_loader, **method_kwargs)
+        elif method == "noise_tunnel_ig":
+            attributions = NNAttribution(self.model).noise_tunnel_ig(data_loader, **method_kwargs)
+        elif "saliency" in method:
+            attributions = NNAttribution(self.model).saliency(data_loader, **method_kwargs)
+        elif method == "input_x_gradient":
+            attributions = NNAttribution(self.model).input_x_gradient(data_loader, **method_kwargs)
+        elif method == "occlusion":
+            attributions = NNAttribution(self.model).occlusion(data_loader, **method_kwargs)
+        elif method == "shapley_value_sampling":
+            attributions = NNAttribution(self.model).shapley_value_sampling(data_loader, **method_kwargs)
+        elif method == "permutation":
+            attributions = NNAttribution(self.model).permutation(data_loader, **method_kwargs)
+        else:
+            raise ValueError(f"unknown attribution method {method}")
+
+        attributions = _postprocess(attributions, postprocess)
+
+        return attributions, preds, probs.detach().cpu().numpy()
+
     def _attribution(self, data_loader: DataLoader, method: str, **method_kwargs) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         if isinstance(self.model, TabNetClassifier):
             return self._attribution_tabnet(data_loader, method=method, **method_kwargs)
         elif isinstance(self.model, RandomForest):
             return self._attribution_rf(data_loader, method=method, **method_kwargs)
+        elif isinstance(self.model, MLPClassifier):
+            return self._attribution_mlp(data_loader, method=method, **method_kwargs)
         else:
             raise ValueError(f"model type is not supported {type(self.model)}")
 
@@ -492,6 +643,10 @@ def _postprocess(attributions: np.ndarray, postprocess: Optional[str] = None) ->
     elif postprocess == "relative":
         attributions[attributions > .0] += attributions[attributions > .0] * 2
         attributions[attributions < .0] *= -1
+    elif postprocess == "absolute":
+        attributions = np.abs(attributions)
+    elif postprocess == "flip_sign":
+        attributions *= -1
 
     return attributions
 
@@ -528,7 +683,7 @@ def attribution_fn(args: Namespace):
     dm.prepare_data()
     dm.setup()
 
-    attributor = Attributor(
+    attributor = Attribution(
         model=model,
         dm=dm,
         logger=mlf_logger,
