@@ -11,6 +11,7 @@ from typing import Optional, List, Dict, Union, Tuple
 import captum.attr as ca
 import numpy as np
 import torch
+from mlflow.exceptions import RestException
 from mlflow.tracking import MlflowClient
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import MLFlowLogger
@@ -23,8 +24,8 @@ from baseline import MLPClassifier
 from baseline.rf import RandomForest
 from datasets import HERGClassifierDataModule, Hergophores
 from datasets.featurizer import calculate_ranking_scores
-from tabnet_lightning import TabNetClassifier
 from shared.utils import time_it
+from tabnet_lightning import TabNetClassifier
 
 
 class RFAttribution:
@@ -46,6 +47,31 @@ class RFAttribution:
 
         return X, y
 
+    def _inputs_captum(self, data_loader: DataLoader):
+        """prepare inputs for captum attribution"""
+        inputs, _ = next(iter(data_loader))
+
+        inputs = inputs.reshape(len(inputs), -1) if inputs.ndim == 1 else inputs
+        # inputs.requires_grad_(True)
+
+        return inputs
+
+    def _forward(self, inputs: torch.Tensor):
+        """wrapper function for captum attribution"""
+
+        X = inputs.detach().cpu().numpy()
+
+        _verbose = self.rf.model.verbose
+        self.rf.model.verbose = 0
+        _, probs = self.rf.predict(X)
+        self.rf.model.verbose = _verbose
+
+        # random forest outputs prob for active/inactive - we use active/positive ones + corresponding global threshold
+        pos_probs = probs[:, 1].reshape(-1, 1)
+        pos_probs = torch.from_numpy(pos_probs).to(inputs.device)
+
+        return pos_probs
+
     @time_it
     def treeinterpreter(self, data_loader: DataLoader) -> np.ndarray:
         """
@@ -66,7 +92,12 @@ class RFAttribution:
         """
         X, _ = self._inputs(data_loader)
 
+        _verbose = self.rf.model.verbose
+        self.rf.model.verbose = 0
+
         _, _, contributions = treeinterpreter.predict(self.rf.model, X, joint_contribution=False)
+
+        self.rf.model.verbose = _verbose
 
         return contributions
 
@@ -87,8 +118,13 @@ class RFAttribution:
 
         X, y = self._inputs(data_loader)
 
+        _verbose = self.rf.model.verbose
+        self.rf.model.verbose = 0
+
         result = permutation_importance(
             self.rf.model, X, y, random_state=self.rf.seed, n_jobs=self.rf.n_jobs, **method_kwargs)
+
+        self.rf.model.verbose = _verbose
 
         # repeat n_samples along sample axis
         contributions = np.repeat(result.importances_mean[np.newaxis, :], len(X), axis=0)
@@ -139,18 +175,51 @@ class RFAttribution:
 
         return contributions
 
-    def lime(self, data_loader: DataLoader, **method_kwargs) -> np.ndarray:
-        """
+    @time_it
+    def occlusion(self, data_loader, **method_kwargs) -> np.ndarray:
+        """occlusion - https://captum.ai/docs/algorithms#occlusion"""
 
-        using lime - https://github.com/marcotcr/lime
+        method = ca.Occlusion(self._forward)
 
-        Args:
-            data_loader ():
+        attributions = method.attribute(self._inputs_captum(data_loader), target=0, **method_kwargs)
+        attributions = attributions.detach().cpu().numpy()
 
-        Returns:
+        return attributions
 
-        """
-        raise NotImplementedError(f"lime contribution not implemented yet")
+    @time_it
+    def shapley_value_sampling(self, data_loader, **method_kwargs) -> np.ndarray:
+        """shapley value sampling - https://captum.ai/docs/algorithms#shapley_value_sampling"""
+
+        method = ca.ShapleyValueSampling(self._forward)
+
+        attributions = method.attribute(self._inputs_captum(data_loader), target=0, **method_kwargs)
+        attributions = attributions.detach().cpu().numpy()
+
+        return attributions
+
+    # @time_it
+    # def permutation(self, data_loader, **method_kwargs) -> np.ndarray:
+    #     """permutation - https://captum.ai/docs/algorithms#permutation"""
+    #
+    #     method = ca.FeaturePermutation(self._forward)
+    #
+    #     attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
+    #     attributions = attributions.detach().cpu().numpy()
+    #
+    #     return attributions
+
+    # def lime(self, data_loader: DataLoader, **method_kwargs) -> np.ndarray:
+    #     """
+    #
+    #     using lime - https://github.com/marcotcr/lime
+    #
+    #     Args:
+    #         data_loader ():
+    #
+    #     Returns:
+    #
+    #     """
+    #     raise NotImplementedError(f"lime contribution not implemented yet")
 
 
 class NNAttribution:
@@ -273,45 +342,27 @@ class NNAttribution:
 
         return attributions
 
-    # def lrp(self, data_loader, **method_kwargs) -> np.ndarray:
-    #     """lrp - https://captum.ai/docs/algorithms#lrp - not working identity is not supported by captum"""
-    #
-    #     method = ca.LRP(self._model)
-    #
-    #     start = timer()
-    #     print("lrp start")
-    #     attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
-    #     print(f"lrp runtime: {timer() - start} sec")
-    #
-    #     attributions = attributions.detach().cpu().numpy()
-    #
-    #     return attributions
+    @time_it
+    def lrp(self, data_loader, **method_kwargs) -> np.ndarray:
+        """lrp - https://captum.ai/docs/algorithms#lrp"""
 
-    # def deep_lift(self, data_loader, multiply_by_inputs: bool = True, **method_kwargs) -> np.ndarray:
-    #     """
-    #     deep lift - https://captum.ai/api/deep_lift.html
-    #
-    #     not working atm due to captum limitation with parameter sharing networks
-    #
-    #     Args:
-    #         data_loader ():
-    #         multiply_by_inputs ():
-    #         **method_kwargs ():
-    #
-    #     Returns:
-    #
-    #     """
-    #
-    #     method = ca.DeepLift(self._model, multiply_by_inputs=multiply_by_inputs)
-    #
-    #     start = timer()
-    #     print("deep lift start")
-    #     attributions = method.attribute(self._inputs(data_loader), target=self.target, **method_kwargs)
-    #     print(f"deep lift runtime: {timer() - start} sec")
-    #
-    #     attributions = attributions.detach().cpu().numpy()
-    #
-    #     return attributions
+        method = ca.LRP(self._model)
+
+        attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
+        attributions = attributions.detach().cpu().numpy()
+
+        return attributions
+
+    @time_it
+    def deeplift(self, data_loader, multiply_by_inputs: bool = True, **method_kwargs) -> np.ndarray:
+        """deep lift - https://captum.ai/api/deep_lift.html"""
+
+        method = ca.DeepLift(self._model, multiply_by_inputs=multiply_by_inputs)
+
+        attributions = method.attribute(self._inputs(data_loader), target=0, **method_kwargs)
+        attributions = attributions.detach().cpu().numpy()
+
+        return attributions
 
 
 class Attribution:
@@ -352,12 +403,13 @@ class Attribution:
         self.nr_samples = nr_samples
 
         self.model = model
+        self.threshold = self._determine_threshold(.5) if threshold is None else threshold
+
         if type(model) in [TabNetClassifier, MLPClassifier]:
             self.device = torch.device(device)
+            # self.device = device
             self.model.eval()
             self.model.to(self.device)
-
-        self.threshold = self._determine_threshold(.5) if threshold is None else threshold
 
     def _determine_threshold_nn(self, threshold_default: float = .5) -> float:
         metrics = Trainer().test(model=self.model, test_dataloaders=self.dm.train_dataloader())
@@ -422,6 +474,12 @@ class Attribution:
             attributions = NNAttribution(self.model).shapley_value_sampling(data_loader, **method_kwargs)
         elif method == "permutation":
             attributions = NNAttribution(self.model).permutation(data_loader, **method_kwargs)
+        elif method == "lrp":
+            # attributions = NNAttribution(self.model).lrp(data_loader, **method_kwargs)
+            raise ValueError(f"lrp not implemented yet")
+        elif method == "deeplift":
+            # attributions = NNAttribution(self.model).deeplift(data_loader, **method_kwargs)
+            raise ValueError(f"deeplift not working properly with tabnet due to parameter sharing")
         else:
             raise ValueError(f"unknown attribution method {method}")
 
@@ -446,6 +504,10 @@ class Attribution:
             attributions = RFAttribution(self.model).permutation(data_loader, **method_kwargs)
         elif method == "input_x_impurity":
             attributions = RFAttribution(self.model).input_x_impurity(data_loader)
+        elif method == "occlusion":
+            attributions = RFAttribution(self.model).occlusion(data_loader, **method_kwargs)
+        elif method == "shapley_value_sampling":
+            attributions = RFAttribution(self.model).shapley_value_sampling(data_loader, **method_kwargs)
         else:
             raise ValueError(f"unknown type {method}")
 
@@ -487,6 +549,11 @@ class Attribution:
             attributions = NNAttribution(self.model).shapley_value_sampling(data_loader, **method_kwargs)
         elif method == "permutation":
             attributions = NNAttribution(self.model).permutation(data_loader, **method_kwargs)
+        elif method == "lrp":
+            # attributions = NNAttribution(self.model).lrp(data_loader, **method_kwargs)
+            raise ValueError(f"lrp is not implemented - custom rules needs to be added")
+        elif method == "deeplift":
+            attributions = NNAttribution(self.model).deeplift(data_loader, **method_kwargs)
         else:
             raise ValueError(f"unknown attribution method {method}")
 
@@ -601,9 +668,12 @@ class Attribution:
                 reference_smile, reference_result_values = next(iter(reference_result.items()))
 
                 if self.logger:
-                    self.logger.experiment.log_param(run_id=self.logger._run_id, key="train/threshold-t" + str(self.label_idx),
-                                                     value=value(self.threshold))
-                    self.logger.experiment.log_param(run_id=self.logger._run_id, key="smile" + str(i), value=value(reference_smile))
+                    try:
+                        self.logger.experiment.log_param(run_id=self.logger._run_id, key="train/threshold-t" + str(self.label_idx),
+                                                         value=value(self.threshold))
+                        self.logger.experiment.log_param(run_id=self.logger._run_id, key="smile" + str(i), value=value(reference_smile))
+                    except RestException as re:
+                        print(re)
 
                 for k, v in reference_result_values.items():
                     key = t + "/" + "smile" + str(i) + "/" + k
@@ -653,6 +723,7 @@ def _postprocess(attributions: np.ndarray, postprocess: Optional[str] = None) ->
 
 def attribution_fn(args: Namespace):
     model = TabNetClassifier.load_from_checkpoint(args.checkpoint_path + args.checkpoint_name, strict=False)
+    # model = MLPClassifier.load_from_checkpoint(args.checkpoint_path + args.checkpoint_name, strict=False)
 
     args = Namespace(**dict(model.hparams_initial, **vars(args)))
 
@@ -702,8 +773,25 @@ def manual_args(args: Namespace) -> Namespace:
     args.track_metrics = []
     args.track_metrics += [
         # "test/mean/avg_score_pred_active",
-        "test/mean/avg_score_pred_inactive",
-        "integrated_gradients/test/mean/avg_score_pred_inactive",
+        "test/mean/avg_score_pred_inactive/tabnet",
+        "test/mean/avg_score_pred_inactive/integrated_gradients",
+        "test/mean/avg_score_pred_inactive/saliency",
+        "test/mean/avg_score_pred_inactive/saliency-absolute",
+        "test/mean/avg_score_pred_inactive/input_x_gradient",
+        "test/mean/avg_score_pred_inactive/occlusion",
+        "test/mean/avg_score_pred_inactive/deeplift",
+        "test/mean/avg_score_pred_inactive/shapley_value_sampling",
+        "test/mean/avg_score_pred_inactive/noise_tunnel_ig",
+
+        "test/mean/avg_score_pred_active/tabnet",
+        "test/mean/avg_score_pred_active/integrated_gradients",
+        "test/mean/avg_score_pred_active/saliency",
+        "test/mean/avg_score_pred_active/saliency-absolute",
+        "test/mean/avg_score_pred_active/input_x_gradient",
+        "test/mean/avg_score_pred_active/occlusion",
+        "test/mean/avg_score_pred_active/deeplift",
+        "test/mean/avg_score_pred_active/shapley_value_sampling",
+        "test/mean/avg_score_pred_active/noise_tunnel_ig",
     ]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
@@ -712,9 +800,12 @@ def manual_args(args: Namespace) -> Namespace:
     args.attribution_kwargs = {
         "data_types": ["test"],
         "methods": [
-            {"default": {
+            {"tabnet": {
                 "postprocess": None
             }},
+            # {"deeplift": {
+            #     "postprocess": None
+            # }},
             {"integrated_gradients": {
                 "postprocess": None
             }},
@@ -722,34 +813,38 @@ def manual_args(args: Namespace) -> Namespace:
                 "postprocess": None,
                 "abs": False,  # Returns absolute value of gradients if set to True
             }},
+            {"saliency-absolute": {
+                "postprocess": None,
+                "abs": True,
+            }},
             {"input_x_gradient": {
                 "postprocess": None
             }},
-            # {"occlusion": {
-            #     "sliding_window_shapes": (1,),
-            #     "perturbations_per_eval": 1,
-            #     "show_progress": True,
-            #     "postprocess": None
-            # }},
-            # {"shapley_value_sampling": {
-            #     "n_samples": 10,  # The number of feature permutations tested
-            #     "perturbations_per_eval": 1,
-            #     "show_progress": True,  # takes around 30-40 min for default args
-            #     "postprocess": None
-            # }},
+            {"occlusion": {
+                "sliding_window_shapes": (1,),
+                "perturbations_per_eval": 1,
+                "show_progress": True,
+                "postprocess": None
+            }},
+            {"shapley_value_sampling": {
+                "n_samples": 10,  # The number of feature permutations tested
+                "perturbations_per_eval": 1,
+                "show_progress": True,  # takes around 30-40 min for default args
+                "postprocess": None
+            }},
             # {"permutation": {
             #     "perturbations_per_eval": 1,
             #     "show_progress": True,  # takes around 30-40 min for default args
             #     "postprocess": None
             # }},
-            # {"noise_tunnel_ig": {
-            #     "postprocess": None
-            # }}
+            {"noise_tunnel_ig": {
+                "postprocess": None
+            }}
         ],
         "track_metrics": args.track_metrics,
         "label": "active_g10",
         "label_idx": 0,
-        "threshold": 0.5,
+        # "threshold": 0.5,
         "references": Hergophores.ACTIVES_UNIQUE_,
 
         # "nr_samples": 100,
@@ -757,9 +852,9 @@ def manual_args(args: Namespace) -> Namespace:
     # ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
 
     # logger/plot params
-    args.experiment_name = "herg_tn_attr1"
-    args.experiment_id = "190"
-    args.run_id = "f2abb80eda84417593a67a535402eb72"
+    args.experiment_name = "herg_tn_tpe1"
+    args.experiment_id = "212"
+    args.run_id = "5e937312f6ac415e9a498e5b87bc6b97"
 
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
 
