@@ -16,7 +16,7 @@ class MLP(nn.Module):
                  input_size: int,
                  hidden_size: Union[List[int], int],
                  dropout: float = 0.1,
-                 activation: nn.Module = nn.ReLU(),
+                 activation: str = "relu",
                  normalize_input: bool = False,
                  batch_norm: bool = False,
                  momentum: float = 0.1,
@@ -31,7 +31,13 @@ class MLP(nn.Module):
         layers = []
         in_features = input_size
         for hidden_size in hidden_sizes:
-            layer = [nn.Linear(in_features=in_features, out_features=hidden_size), activation]
+            layer = [nn.Linear(in_features=in_features, out_features=hidden_size)]
+
+            if activation == "relu":
+                layer += [nn.ReLU(inplace=True)]
+            else:
+                raise NotImplementedError(f"activation {activation} is not implemented yet")
+
             layer += [nn.BatchNorm1d(hidden_size, momentum=momentum)] if batch_norm else []
             layer += [nn.Dropout(p=dropout)] if dropout > 0 else []
 
