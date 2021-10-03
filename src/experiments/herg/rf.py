@@ -1,4 +1,5 @@
 import os
+import random
 import sys
 from argparse import Namespace, ArgumentParser
 from pprint import pprint
@@ -111,10 +112,19 @@ def manual_args(args: Namespace) -> Namespace:
         "test/Accuracy",
     ]
     args.track_metrics += [
-        "test/mean/avg_score_pred_inactive",
+        "test/mean/avg_score_pred_active/impurity",
+        "test/mean/avg_score_pred_active/treeinterpreter",
+        "test/mean/avg_score_pred_active/permutation",
+        "test/mean/avg_score_pred_active/input_x_impurity",
+        "test/mean/avg_score_pred_active/occlusion",
+        "test/mean/avg_score_pred_active/shapley_value_sampling",
+
+        "test/mean/avg_score_pred_inactive/impurity",
         "test/mean/avg_score_pred_inactive/treeinterpreter",
         "test/mean/avg_score_pred_inactive/permutation",
         "test/mean/avg_score_pred_inactive/input_x_impurity",
+        "test/mean/avg_score_pred_inactive/occlusion",
+        "test/mean/avg_score_pred_inactive/shapley_value_sampling",
     ]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
@@ -123,19 +133,31 @@ def manual_args(args: Namespace) -> Namespace:
     args.attribution_kwargs = {
         "data_types": ["test"],
         "methods": [
-            # {"default": {
+            {"impurity": {
+                "postprocess": None
+            }},
+            # {"shapley_value_sampling": {
+            #     "n_samples": 10,  # The number of feature permutations tested
+            #     "perturbations_per_eval": 1,
+            #     "show_progress": True,  # takes around 30-40 min for default args
             #     "postprocess": None
             # }},
+            {"occlusion": {
+                "sliding_window_shapes": (1,),
+                "perturbations_per_eval": 1,
+                "show_progress": True,
+                "postprocess": None
+            }},
             {"treeinterpreter": {
                 "postprocess": None
             }},
-            # {"permutation": {
-            #     "n_repeats": 5,
-            #     "postprocess": None,
-            # }},
-            # {"input_x_impurity": {
-            #     "postprocess": "normalize"
-            # }},
+            {"permutation": {
+                "n_repeats": 5,
+                "postprocess": None,
+            }},
+            {"input_x_impurity": {
+                "postprocess": "normalize"
+            }},
         ],
         "track_metrics": args.track_metrics,
         # "label": "active_g100",
@@ -148,23 +170,21 @@ def manual_args(args: Namespace) -> Namespace:
     }
     # args.attribution_kwargs = None
 
-    # [333, 7664, 9744, 1432, 1138 ]
-
     # trainer/logging args
     args.objective_name = "val/AUROC"
     args.minimize = False
-    args.experiment_name = "herg_rf_attr2"
-    args.run_name = "test1"
+    args.experiment_name = "herg_rf_best_kfold"
+    args.run_name = "rf"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
-    args.seed = 1
+    args.seed = random.randint(0, 2 ** 32 - 1)
 
     # data module args
     args.batch_size = 9999
-    #args.split_type = "random_kfold"
-    #args.split_size = (5, 0, 1)
-    args.split_type = "random"
-    args.split_size = (0.6, 0.2, 0.2)
-    args.split_seed = 2
+    args.split_type = "random_kfold"
+    args.split_size = (5, 0, 1)
+    # args.split_type = "random"
+    # args.split_size = (0.6, 0.2, 0.2)
+    args.split_seed = random.randint(0, 2 ** 32 - 1)
 
     # args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
     args.use_labels = ["active_g10"]
@@ -184,13 +204,14 @@ def manual_args(args: Namespace) -> Namespace:
 
     # model args
     args.rf_kwargs = {
-        "n_estimators": 100,
-        # "max_features": None
+        "criterion": "entropy",
+        "max_depth": 40,
+        "bootstrap": False,
+        "min_samples_leaf": 2,
+        "min_samples_split": 5,
+        "max_features": "sqrt",
+        "n_estimators": 200,
     }
-
-    # args.log_sparsity = True
-    # args.log_sparsity = "verbose"
-    # args.log_parameters = False
 
     return args
 

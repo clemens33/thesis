@@ -1,4 +1,5 @@
 import os
+import random
 import sys
 import traceback
 from argparse import Namespace, ArgumentParser
@@ -87,9 +88,9 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, Dict, Dict, T
             mode="max" if not args.checkpoint_minimize else "min",
         ),
         EarlyStopping(
-            monitor="val/loss",
+            monitor=args.patience_objective if hasattr(args, "patience_objective") else "val/loss",
             patience=args.patience,
-            mode="min",
+            mode="min" if args.patience_minimize else "max",
             verbose=True,
         ),
         LearningRateMonitor(logging_interval="step"),
@@ -187,12 +188,25 @@ def manual_args(args: Namespace) -> Namespace:
     ]
     args.track_metrics += [
         # "test/mean/avg_score_pred_active",
-        "test/mean/avg_score_pred_inactive",
         "test/mean/avg_score_pred_inactive/tabnet",
         "test/mean/avg_score_pred_inactive/integrated_gradients",
         "test/mean/avg_score_pred_inactive/saliency",
         "test/mean/avg_score_pred_inactive/saliency-absolute",
         "test/mean/avg_score_pred_inactive/input_x_gradient",
+        "test/mean/avg_score_pred_inactive/occlusion",
+        "test/mean/avg_score_pred_inactive/deeplift",
+        "test/mean/avg_score_pred_inactive/shapley_value_sampling",
+        "test/mean/avg_score_pred_inactive/noise_tunnel_ig",
+
+        "test/mean/avg_score_pred_active/tabnet",
+        "test/mean/avg_score_pred_active/integrated_gradients",
+        "test/mean/avg_score_pred_active/saliency",
+        "test/mean/avg_score_pred_active/saliency-absolute",
+        "test/mean/avg_score_pred_active/input_x_gradient",
+        "test/mean/avg_score_pred_active/occlusion",
+        "test/mean/avg_score_pred_active/deeplift",
+        "test/mean/avg_score_pred_active/shapley_value_sampling",
+        "test/mean/avg_score_pred_active/noise_tunnel_ig",
     ]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
@@ -204,21 +218,43 @@ def manual_args(args: Namespace) -> Namespace:
             {"tabnet": {
                 "postprocess": None
             }},
+            # {"deeplift": {
+            #     "postprocess": None
+            # }},
             {"integrated_gradients": {
-                "n_steps": 50,
                 "postprocess": None
             }},
             {"saliency": {
                 "postprocess": None,
-                "abs": False,
+                "abs": False,  # Returns absolute value of gradients if set to True
             }},
-            # {"saliency-absolute": {
-            #     "postprocess": None,
-            #     "abs": True,
-            # }},
-            # {"input_x_gradient": {
+            {"saliency-absolute": {
+                "postprocess": None,
+                "abs": True,
+            }},
+            {"input_x_gradient": {
+                "postprocess": None
+            }},
+            {"occlusion": {
+                "sliding_window_shapes": (1,),
+                "perturbations_per_eval": 1,
+                "show_progress": True,
+                "postprocess": None
+            }},
+            {"shapley_value_sampling": {
+                "n_samples": 10,  # The number of feature permutations tested
+                "perturbations_per_eval": 1,
+                "show_progress": True,  # takes around 30-40 min for default args
+                "postprocess": None
+            }},
+            # {"permutation": {
+            #     "perturbations_per_eval": 1,
+            #     "show_progress": True,  # takes around 30-40 min for default args
             #     "postprocess": None
             # }},
+            {"noise_tunnel_ig": {
+                "postprocess": None
+            }}
         ],
         "track_metrics": args.track_metrics,
         "label": "active_g10",
@@ -230,23 +266,26 @@ def manual_args(args: Namespace) -> Namespace:
     # trainer/logging args
     args.objective_name = "val/loss"
     args.minimize = True
-    args.experiment_name = "herg_tn_attr4"
+    args.experiment_name = "herg_tn_best_kfold"
     args.checkpoint_objective = "val/loss"
     args.checkpoint_minimize = True
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
     args.gradient_clip_val = 1.0
     args.stochastic_weight_avg = False
-    args.seed = 0
+    args.seed = random.randint(0, 2 ** 32 - 1)
+    args.patience_objective = "val/loss"
+    args.patience_minimize = True
     args.patience = 10
 
     # data module args
-    args.batch_size = 512
-    #args.split_type = "random_kfold"
-    #args.split_size = (5, 0, 1)
-    args.split_type = "random"
-    args.split_size = (0.6, 0.2, 0.2)
-    args.split_seed = 1
+    args.batch_size = 256
+    args.split_type = "random_kfold"
+    args.split_size = (5, 0, 1)
+    #args.split_type = "random"
+    #args.split_size = (0.6, 0.2, 0.2)
+
+    args.split_seed = random.randint(0, 2 ** 32 - 1)
     args.standardize = False
 
     # args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
@@ -266,36 +305,38 @@ def manual_args(args: Namespace) -> Namespace:
     args.num_workers = 8
     args.cache_dir = "../../../" + "data/herg/"
 
-    args.run_name = "entmax15"
+    args.run_name = "tn"
 
     # model args
     args.decision_size = 16
     args.feature_size = args.decision_size * 2
-    args.nr_layers = 2
+    args.nr_layers = 4
     args.nr_shared_layers = 2
-    args.nr_steps = 4
+    args.nr_steps = 3
     args.relaxation_type = "gamma_fixed"
     args.gamma = 1.5
-    args.attentive_type = "alpha_trainable"
-    args.alpha = 1.5
+    args.attentive_type = "sparsemax"
+    #args.alpha = 1.5
 
     #args.lambda_sparse = 0.000001
-    args.lambda_sparse = 1e-6
+    args.lambda_sparse = 0.0001
+    #args.lambda_sparse = 0.0
 
     args.normalize_input = True
-    args.virtual_batch_size = 16
+    #args.virtual_batch_size = 16
+    args.virtual_batch_size = 64
     # args.virtual_batch_size = 9999999  # -1 do not use any batch normalization
-    args.momentum = 0.1
+    args.momentum = 0.05
 
-    args.lr = 0.02
-    args.optimizer = "adam"
-    #args.optimizer = "adamw"
-    #args.optimizer_params = {"weight_decay": 0.001}
+    args.lr = 0.01
+    #args.optimizer = "adam"
+    args.optimizer = "adamw"
+    args.optimizer_params = {"weight_decay": 0.0001}
 
     args.scheduler = "exponential_decay"
     args.scheduler_params = {"decay_step": 800, "decay_rate": 0.9}
-    # args.scheduler = "linear_with_warmup"
-    # args.scheduler_params = {"warmup_steps": 0.05}
+    #args.scheduler = "linear_with_warmup"
+    #args.scheduler_params = {"warmup_steps": 0.3}
     #args.scheduler = "none"
 
     args.log_sparsity = True

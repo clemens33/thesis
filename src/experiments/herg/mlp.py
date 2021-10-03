@@ -189,11 +189,24 @@ def manual_args(args: Namespace) -> Namespace:
     args.track_metrics += [
         # "test/mean/avg_score_pred_active",
         "test/mean/avg_score_pred_inactive",
-        "test/mean/avg_score_pred_inactive/tabnet",
         "test/mean/avg_score_pred_inactive/integrated_gradients",
         "test/mean/avg_score_pred_inactive/saliency",
         "test/mean/avg_score_pred_inactive/saliency-absolute",
         "test/mean/avg_score_pred_inactive/input_x_gradient",
+        "test/mean/avg_score_pred_inactive/occlusion",
+        "test/mean/avg_score_pred_inactive/deeplift",
+        "test/mean/avg_score_pred_inactive/shapley_value_sampling",
+        "test/mean/avg_score_pred_inactive/noise_tunnel_ig",
+
+        "test/mean/avg_score_pred_active",
+        "test/mean/avg_score_pred_active/integrated_gradients",
+        "test/mean/avg_score_pred_active/saliency",
+        "test/mean/avg_score_pred_active/saliency-absolute",
+        "test/mean/avg_score_pred_active/input_x_gradient",
+        "test/mean/avg_score_pred_active/occlusion",
+        "test/mean/avg_score_pred_active/deeplift",
+        "test/mean/avg_score_pred_active/shapley_value_sampling",
+        "test/mean/avg_score_pred_active/noise_tunnel_ig",
     ]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
@@ -202,6 +215,9 @@ def manual_args(args: Namespace) -> Namespace:
     args.attribution_kwargs = {
         "data_types": ["test"],
         "methods": [
+            {"deeplift": {
+                "postprocess": None
+            }},
             {"integrated_gradients": {
                 "n_steps": 50,
                 "postprocess": None
@@ -210,11 +226,31 @@ def manual_args(args: Namespace) -> Namespace:
                 "postprocess": None,
                 "abs": False,
             }},
-            # {"saliency-absolute": {
-            #     "postprocess": None,
-            #     "abs": True,
-            # }},
+            {"saliency-absolute": {
+                "postprocess": None,
+                "abs": True,
+            }},
             {"input_x_gradient": {
+                "postprocess": None
+            }},
+            {"occlusion": {
+                "sliding_window_shapes": (1,),
+                "perturbations_per_eval": 1,
+                "show_progress": True,
+                "postprocess": None
+            }},
+            # {"permutation": {
+            #     "perturbations_per_eval": 1,
+            #     "show_progress": True,  # takes around 30-40 min for default args
+            #     "postprocess": None
+            # }},
+            {"noise_tunnel_ig": {
+                "postprocess": None
+            }},
+            {"shapley_value_sampling": {
+                "n_samples": 10,  # The number of feature permutations tested
+                "perturbations_per_eval": 1,
+                "show_progress": True,  # takes around 30-40 min for default args
                 "postprocess": None
             }},
         ],
@@ -228,7 +264,7 @@ def manual_args(args: Namespace) -> Namespace:
     # trainer/logging args
     args.objective_name = "val/loss"
     args.minimize = True
-    args.experiment_name = "herg_mlp_test2"
+    args.experiment_name = "herg_mlp_best_kfold"
     args.checkpoint_objective = "val/loss"
     args.checkpoint_minimize = True
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
@@ -236,14 +272,16 @@ def manual_args(args: Namespace) -> Namespace:
     args.gradient_clip_val = 1.0
     args.stochastic_weight_avg = False
     args.seed = random.randint(0, 2 ** 32 - 1)
+    args.patience_objective = "val/loss"
+    args.patience_minimize = True
     args.patience = 10
 
     # data module args
-    args.batch_size = 256
-    # args.split_type = "random_kfold"
-    # args.split_size = (5, 0, 1)
-    args.split_type = "random"
-    args.split_size = (0.6, 0.2, 0.2)
+    args.batch_size = 512
+    args.split_type = "random_kfold"
+    args.split_size = (5, 0, 1)
+    #args.split_type = "random"
+    #args.split_size = (0.6, 0.2, 0.2)
     args.split_seed = random.randint(0, 2 ** 32 - 1)
     args.standardize = False
 
@@ -267,24 +305,23 @@ def manual_args(args: Namespace) -> Namespace:
     args.run_name = "mlp"
 
     # model args
-    args.hidden_size = [32] * 5
-    args.dropout = 0.1
+    args.hidden_size = [128] * 3
+    args.dropout = 0.0
     args.normalize_input = True
     args.batch_norm = True
     args.momentum = 0.1
 
-    args.lr = 0.01
-    args.optimizer = "adam"
-    # args.optimizer = "adamw"
-    # args.optimizer_params = {"weight_decay": 0.001}
+    args.lr = 0.001
+    #args.optimizer = "adam"
+    args.optimizer = "adamw"
+    args.optimizer_params = {"weight_decay": 0.0001}
 
-    args.scheduler = "exponential_decay"
-    args.scheduler_params = {"decay_step": 800, "decay_rate": 0.9}
-    # args.scheduler = "linear_with_warmup"
-    # args.scheduler_params = {"warmup_steps": 0.05}
+    #args.scheduler = "exponential_decay"
+    #args.scheduler_params = {"decay_step": 800, "decay_rate": 0.9}
+    args.scheduler = "linear_with_warmup"
+    args.scheduler_params = {"warmup_steps": 0.1}
     # args.scheduler = "none"
 
-    args.log_sparsity = True
     # args.log_sparsity = "verbose"
     # args.log_parameters = False
 

@@ -67,6 +67,21 @@ def manual_args(args: Namespace) -> Namespace:
         "test/mean/avg_score_pred_inactive/saliency",
         "test/mean/avg_score_pred_inactive/saliency-absolute",
         "test/mean/avg_score_pred_inactive/input_x_gradient",
+        "test/mean/avg_score_pred_inactive/occlusion",
+        "test/mean/avg_score_pred_inactive/deeplift",
+        "test/mean/avg_score_pred_inactive/shapley_value_sampling",
+        "test/mean/avg_score_pred_inactive/noise_tunnel_ig",
+
+        "test/mean/avg_score_pred_active",
+        "test/mean/avg_score_pred_active/tabnet",
+        "test/mean/avg_score_pred_active/integrated_gradients",
+        "test/mean/avg_score_pred_active/saliency",
+        "test/mean/avg_score_pred_active/saliency-absolute",
+        "test/mean/avg_score_pred_active/input_x_gradient",
+        "test/mean/avg_score_pred_active/occlusion",
+        "test/mean/avg_score_pred_active/deeplift",
+        "test/mean/avg_score_pred_active/shapley_value_sampling",
+        "test/mean/avg_score_pred_active/noise_tunnel_ig",
     ]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_active" for i in range(20)]
     # args.track_metrics += ["test" + "/" + "smile" + str(i) + "/" + "avg_score_true_inactive" for i in range(20)]
@@ -105,47 +120,49 @@ def manual_args(args: Namespace) -> Namespace:
     args.trials = 30
     args.objective_name = "val/AUROC"
     args.minimize = False
-    args.sampler_name = "random"
+    args.sampler_name = "tpe"
     args.pruner_name = None
     args.search_space = [
         # {"name": "batch_size", "type": "choice", "values": [32, 64, 128, 256]},
-        {"name": "decision_size", "type": "choice", "values": [8, 16, 24, 32, 64]},
+        {"name": "decision_size", "type": "choice", "values": [16, 24, 32, 64]},
         # {"name": "nr_steps", "type": "range", "bounds": [3, 10]},
-        {"name": "nr_steps", "type": "choice", "values": [1, 2, 3, 4, 5]},
+        {"name": "nr_steps", "type": "choice", "values": [3, 4, 5, 7]},
         {"name": "gamma", "type": "choice", "values": [1.0, 1.2, 1.5]},
 
-        {"name": "virtual_batch_size", "type": "choice", "values": [16, 32, 64, 128]},
-        {"name": "momentum", "type": "choice", "values": [0.2, 0.1, 0.05, 0.02]},
+        {"name": "virtual_batch_size", "type": "choice", "values": [16, 32, 64]},
+        {"name": "momentum", "type": "choice", "values": [0.1, 0.05, 0.02]},
 
         {"name": "lambda_sparse", "type": "choice", "values": [0.0, 1e-6, 1e-4, 0.01]},
-        {"name": "lr", "type": "choice", "values": [0.03, 0.02, 0.01]},
+        {"name": "lr", "type": "choice", "values": [0.04, 0.02, 0.01]},
         # {"name": "warmup_steps", "type": "choice", "values": [0.01, 0.05, 0.1, 0]},
         # {"name": "lr", "type": "range", "bounds": [1e-5, 0.01], "log_scale": True},
 
         {"name": "decay_step", "type": "choice", "values": [50, 200, 800]},
-        {"name": "decay_rate", "type": "choice", "values": [0.4, 0.8, 0.9, 0.95]},
+        {"name": "decay_rate", "type": "choice", "values": [0.8, 0.9, 0.95]},
         # {"name": "decay_rate", "type": "range", "bounds": [0.0, 1.0]},
     ]
 
     # trainer/logging args
-    args.experiment_name = "herg_tn_opt2609_3"
-    args.run_name = "vanilla_random"
+    args.experiment_name = "herg_tn_opttpe1"
+    args.run_name = "tpe"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
-    args.seed = 693113678 + 4
+    args.seed = random.randint(0, 2 ** 32 - 1)
     args.checkpoint_objective = "val/loss"
     args.checkpoint_minimize = True
+    args.patience_objective = "val/loss"
+    args.patience_minimize = True
     args.patience = 10
     args.stochastic_weight_avg = False
     args.gradient_clip_val = 1.0
 
     # data module args
-    args.batch_size = 512
+    args.batch_size = 256
     # args.split_type = "random_kfold"
     # args.split_size = (5, 0, 1)
     args.split_type = "random"
     args.split_size = (0.6, 0.2, 0.2)
-    args.split_seed = 381515056 + 4
+    args.split_seed = random.randint(0, 2 ** 32 - 1)
     # args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
     args.use_labels = ["active_g10"]
     args.standardize = False
@@ -167,7 +184,7 @@ def manual_args(args: Namespace) -> Namespace:
     # model args
     args.decision_size = 64
     args.feature_size = args.decision_size * 2
-    args.nr_layers = 2
+    args.nr_layers = 4
     args.nr_shared_layers = 2
     args.nr_steps = 4
     args.relaxation_type = "gamma_fixed"
@@ -185,12 +202,12 @@ def manual_args(args: Namespace) -> Namespace:
     args.momentum = 0.01
 
     args.lr = 0.01
-    args.optimizer = "adam"
+    #args.optimizer = "adam"
     args.scheduler = "exponential_decay"
     args.scheduler_params = {"decay_step": 10, "decay_rate": 0.95}
 
-    # args.optimizer = "adamw"
-    # args.optimizer_params = {"weight_decay": 0.001}
+    args.optimizer = "adamw"
+    args.optimizer_params = {"weight_decay": 0.0001}
     # args.scheduler = "linear_with_warmup"
     # args.scheduler_params = {"warmup_steps": 10}
     # args.scheduler_params = {"warmup_steps": 0.1}
