@@ -30,6 +30,7 @@ class Kfold:
         self.use_test_fold = use_test_fold
 
         self.tracking_uri = tracking_uri
+        self.run_name = "summary"
         self.args = args if args is not None else Namespace()
 
         self.metrics = {}
@@ -82,7 +83,7 @@ class Kfold:
         mlflow.set_tracking_uri(self.tracking_uri)
         mlflow.set_experiment(self.experiment_name)
 
-        with mlflow.start_run():
+        with mlflow.start_run(run_name=self.run_name):
             mlflow.log_param("experiment_name", self.experiment_name)
             mlflow.log_param("folds", self.nr_folds)
             mlflow.log_param("use_test_fold", self.use_test_fold)
