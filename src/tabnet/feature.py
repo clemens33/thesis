@@ -33,7 +33,7 @@ class Layer(nn.Module):
 class FeatureLayer(nn.Module):
     """feature layer using gated linear unit activation"""
 
-    def __init__(self, input_size: int, feature_size: int, shared_layer: Optional[Layer] = None, **kwargs):
+    def __init__(self, input_size: int, feature_size: int, dropout: float = 0.0, shared_layer: Optional[Layer] = None, **kwargs):
         super(FeatureLayer, self).__init__()
 
         if shared_layer is not None:
@@ -43,12 +43,14 @@ class FeatureLayer(nn.Module):
         self.fc = shared_layer if shared_layer is not None else FeatureLayer.init_layer(input_size=input_size, feature_size=feature_size,
                                                                                         **kwargs)
         self.bn = GhostBatchNorm1d(input_size=feature_size * 2, **kwargs)
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else None
 
         self.glu = GLU(n_units=feature_size)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         feature = self.fc(input)
         feature = self.bn(feature)
+        feature = self.dropout(feature) if self.dropout is not None else feature
 
         feature = self.glu(feature)
 
