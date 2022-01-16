@@ -37,3 +37,5 @@ dependencies:
       - captum
       - altair
       - altair_viewer
+      - xgboost
+      - shap
