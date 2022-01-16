@@ -22,7 +22,7 @@ class ClassificationHead(nn.Module):
             self.classifier = nn.Linear(in_features=input_size, out_features=1)
 
             pos_weight = None
-            if class_weights:
+            if class_weights is not None:
                 if len(class_weights) == 2:
                     pos_weight = class_weights[1] / class_weights.sum()
                 elif len(class_weights) == 1:
