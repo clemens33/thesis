@@ -28,6 +28,56 @@ from shared.utils import time_it
 from tabnet_lightning import TabNetClassifier
 
 
+class GBDTAttribution:
+    def __init__(self, gbdt: GBDT) -> None:
+        super().__init__()
+
+        self.gbdt = gbdt
+
+    def _inputs(self, data_loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
+        if len(data_loader) > 1:
+            raise NotImplementedError("mini batches not supported yet")
+
+        X, y = next(iter(data_loader))
+        X = X.detach().cpu().numpy()
+        y = y.detach().cpu().numpy()
+
+        return X, y
+
+    def feature_importances(self, data_loader: DataLoader) -> np.ndarray:
+        """using gbdt default feature importance values"""
+
+        X, _ = self._inputs(data_loader)
+
+        contributions = self.gbdt.model.feature_importances_
+
+        # repeat n_samples along sample axis
+        contributions = np.repeat(contributions[np.newaxis, :], len(X), axis=0)
+
+        return contributions
+
+    @time_it
+    def shap(self, data_loader: DataLoader, **method_kwargs) -> np.ndarray:
+        """
+
+        Contribution calculated using SHAP (SHapley Additive exPlanations) - https://github.com/slundberg/shap
+
+        Args:
+            data_loader ():
+            **method_kwargs ():
+
+        Returns:
+
+        """
+
+        X, _ = self._inputs(data_loader)
+
+        explainer = shap.Explainer(self.gbdt.model)
+        contributions = explainer(X, check_additivity=False)
+
+        return contributions.values
+
+
 class RFAttribution:
     def __init__(self, rf: RandomForest) -> None:
         super().__init__()
@@ -371,7 +421,7 @@ class Attribution:
     """
 
     def __init__(self,
-                 model: Union[TabNetClassifier, RandomForest, MLPClassifier],
+                 model: Union[TabNetClassifier, RandomForest, MLPClassifier, GBDT],
                  dm: HERGClassifierDataModule,
                  methods: List[Dict],
                  logger: Optional[MLFlowLogger] = None,
@@ -434,6 +484,8 @@ class Attribution:
             return self._determine_threshold_nn(threshold_default)
         elif isinstance(self.model, RandomForest):
             self._determine_threshold_rf(threshold_default)
+        elif isinstance(self.model, GBDT):
+            self._determine_threshold_gbdt(threshold_default)
         else:
             return threshold_default
 
@@ -519,7 +571,7 @@ class Attribution:
 
     def _attribution_mlp(self, data_loader: DataLoader, method: str = "default", **method_kwargs) -> Tuple[
         np.ndarray, np.ndarray, np.ndarray]:
-        """gets the tabnet attribution using the defined data_loader"""
+        """gets the mlp attribution using the defined data_loader"""
 
         probs = []
         for inputs, labels in data_loader:
@@ -561,6 +613,21 @@ class Attribution:
 
         return attributions, preds, probs.detach().cpu().numpy()
 
+    def _attribution_gbdt(self, data_loader: DataLoader, method: str = "default", **method_kwargs) -> Tuple[
+        np.ndarray, np.ndarray, np.ndarray]:
+
+        preds, probs = self.model.predict(data_loader)
+        #preds = np.where(probs > self.threshold, 1, 0)
+
+        if method == "feature_importances":
+            attributions = GBDTAttribution(self.model).feature_importances(data_loader)
+        elif method == "shap":
+            attributions = GBDTAttribution(self.model).shap(data_loader, **method_kwargs)
+        else:
+            raise ValueError(f"unknown attribution method {method}")
+
+        return attributions, preds, probs
+
     def _attribution(self, data_loader: DataLoader, method: str, **method_kwargs) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         if isinstance(self.model, TabNetClassifier):
             return self._attribution_tabnet(data_loader, method=method, **method_kwargs)
@@ -568,6 +635,8 @@ class Attribution:
             return self._attribution_rf(data_loader, method=method, **method_kwargs)
         elif isinstance(self.model, MLPClassifier):
             return self._attribution_mlp(data_loader, method=method, **method_kwargs)
+        elif isinstance(self.model, GBDT):
+            return self._attribution_gbdt(data_loader, method=method, **method_kwargs)
         else:
             raise ValueError(f"model type is not supported {type(self.model)}")
 
