@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from entmax import Entmax15, Sparsemax
 
-from tabnet.sparsemax import EntmaxBisect, Sparsemax as MySparsemax
+from tabnet.sparsemax import EntmaxBisect
 from tabnet.utils import GhostBatchNorm1d, Round1 as Round, HardSigm2 as HardSigm
 
 
@@ -24,10 +24,8 @@ class Attentive(nn.Module):
 
             if self.attentive_type == "alpha_trainable":
                 self.attentive = EntmaxBisect(alpha=self.alpha, dim=dim)
-            elif self.attentive_type == "entmax_sparsemax":
-                self.attentive = Sparsemax(dim=dim)
             elif self.attentive_type == "sparsemax":
-                self.attentive = MySparsemax(dim=dim)
+                self.attentive = Sparsemax(dim=dim)
             elif self.attentive_type == "softmax":
                 self.attentive = nn.Softmax(dim=dim)
             elif self.attentive_type == "entmax_entmax15":
@@ -55,8 +53,11 @@ class AttentiveTransformer(nn.Module):
                  **kwargs):
         super(AttentiveTransformer, self).__init__()
 
-        assert relaxation_type not in [
-            "gamma_shared_trainable, gamma_trainable, gamma_fixed"], f"relaxation type {relaxation_type} is unknown"
+        assert relaxation_type in [
+            "gamma_shared_trainable", "gamma_trainable", "gamma_fixed",
+            "gamma_not_applied"], f"relaxation type {relaxation_type} is unknown"
+
+        self.relaxation_type = relaxation_type
 
         gamma_trainable = (relaxation_type == "gamma_trainable")
         self.gamma = nn.Parameter(torch.scalar_tensor(gamma), requires_grad=gamma_trainable) if isinstance(gamma, float) else gamma
@@ -73,7 +74,7 @@ class AttentiveTransformer(nn.Module):
         mask = self.attentive(attentive_feature)
 
         # TODO check what if gamma is an integer
-        prior = prior * (self.gamma - mask)
+        prior = prior * (self.gamma - mask) if self.relaxation_type != "gamma_not_applied" else prior
 
         return mask, prior
 
@@ -92,7 +93,7 @@ class _BinaryMask(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         activated = self.activation(inputs)
-        #mask_tilde = torch.sigmoid(inputs)
+        # mask_tilde = torch.sigmoid(inputs)
         mask = self.round(activated)
 
         # mask = torch.sigmoid(sz)
