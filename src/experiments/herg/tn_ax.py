@@ -111,14 +111,14 @@ def manual_args(args: Namespace) -> Namespace:
 
     # ax args
     args.trials = 25
-    args.trials_sobol = 8
+    args.trials_sobol = 10
     args.objective_name = "val/AUROC"
     args.minimize = False
     args.search_space = [
         #{"name": "batch_size", "type": "choice", "values": [64, 256, 512]},
 
-        {"name": "decision_size", "type": "choice", "values": [8, 16, 32, 64]},
-        {"name": "nr_steps", "type": "choice", "values": [3, 4, 5, 7]},
+        {"name": "decision_size", "type": "choice", "values": [32, 64, 128]},
+        {"name": "nr_steps", "type": "choice", "values": [3, 4, 5, 7, 8]},
         {"name": "gamma", "type": "choice", "values": [1.0, 1.2, 1.5, 2.0]},
         {"name": "lambda_sparse", "type": "choice", "values": [0.0, 1e-6, 1e-4]},
 
@@ -126,9 +126,9 @@ def manual_args(args: Namespace) -> Namespace:
         #{"name": "momentum", "type": "choice", "values": [0.1, 0.03, 0.01]},
 
         # {"name": "lr", "type": "choice", "values": [0.005, 0.01, 0.02, 0.025]},
-        {"name": "lr", "type": "range", "bounds": [0.0005, 0.03], "log_scale": False},
-        {"name": "decay_step", "type": "choice", "values": [50, 200]},
-        {"name": "decay_rate", "type": "choice", "values": [0.8, 0.9, 0.95]},
+        {"name": "lr", "type": "range", "bounds": [1e-5, 0.01], "log_scale": True},
+        #{"name": "decay_step", "type": "choice", "values": [50, 200]},
+        #{"name": "decay_rate", "type": "choice", "values": [0.8, 0.9, 0.95]},
 
         #{"name": "lr", "type": "range", "bounds": [0.005, 0.05], "log_scale": True},
         #{"name": "lr", "type": "choice", "values": [0.005, 0.01, 0.02, 0.03, 0.05]},
@@ -139,15 +139,15 @@ def manual_args(args: Namespace) -> Namespace:
     ]
 
     # trainer/logging args
-    args.experiment_name = "herg_tn_ax3009_01"
+    args.experiment_name = "herg_tn_ax10"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
     args.seed = random.randint(0, 2 ** 32 - 1)
-    args.checkpoint_objective = "val/loss"
-    args.checkpoint_minimize = True
-    args.patience_objective = "val/loss"
-    args.patience_minimize = True
-    args.patience = 10
+    args.checkpoint_objective = "val/AUROC"
+    args.checkpoint_minimize = False
+    args.patience_objective = "val/AUROC"
+    args.patience_minimize = False
+    args.patience = 50
     args.stochastic_weight_avg = False
     args.gradient_clip_val = 1.0
 
@@ -178,12 +178,12 @@ def manual_args(args: Namespace) -> Namespace:
 
     args.decision_size = 16
     args.feature_size = args.decision_size * 2
-    args.nr_layers = 4
+    args.nr_layers = 2
     args.nr_shared_layers = 2
     args.nr_steps = 3
     args.relaxation_type = "gamma_fixed"
     args.gamma = 1.5
-    args.attentive_type = "sparsemax"
+    #args.attentive_type = "sparsemax"
     #args.alpha = 2.0
 
     # args.lambda_sparse = 1e-6
@@ -195,15 +195,15 @@ def manual_args(args: Namespace) -> Namespace:
     #args.virtual_batch_size = 16  # -1 do not use any batch normalization
     #args.momentum = 0.02
 
-    args.optimizer = "adamw"
-    args.optimizer_params = {"weight_decay": 0.0001}
-    # args.lr = 0.01
-    # args.optimizer = "adam"
+    #args.optimizer = "adamw"
+    #args.optimizer_params = {"weight_decay": 0.0001}
+    args.lr = 0.01
+    args.optimizer = "adam"
 
-    args.scheduler = "exponential_decay"
-    args.scheduler_params = {"decay_step": 200, "decay_rate": 0.95}
-    # args.scheduler = "linear_with_warmup"
-    # args.scheduler_params = {"warmup_steps": 10}
+    #args.scheduler = "exponential_decay"
+    #args.scheduler_params = {"decay_step": 200, "decay_rate": 0.95}
+    args.scheduler = "linear_with_warmup"
+    args.scheduler_params = {"warmup_steps": 10}
     # args.scheduler_params = {"warmup_steps": 0.1}
 
     args.log_sparsity = True

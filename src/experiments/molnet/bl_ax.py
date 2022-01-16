@@ -42,24 +42,25 @@ def manual_args(args: Namespace) -> Namespace:
     ]
 
     # trainer/logging args
-    args.experiment_name = "bbbp_bl_1024-4_ax1"
+    args.experiment_name = "sider_bl_4096_ax1"
     args.tracking_uri=os.getenv("TRACKING_URI", default="http://localhost:5000")
-    args.max_steps = 2000
-    args.seed = 1234
+    args.max_steps = 1000
+    args.seed = 0
     args.patience = 100
 
     # data module args
-    args.data_name = "bbbp"
+    args.data_name = "sider"
     args.batch_size = 256
-    args.split_seed = 1234
-    args.n_bits = 1024
+    args.split_seed = 0
+    args.split_type = "random"
+    args.n_bits = 4096
     args.radius = 4
     args.chirality = True
     args.features = True
     args.featurizer_name = "ecfp"
 
     args.num_workers = 4
-    args.cache_dir = "../../../" + "data/molnet/bbbp/"
+    args.cache_dir = "../../../" + "data/molnet/sider/"
 
     # model args
     args.hidden_size = [256, 256, 256]
@@ -76,7 +77,7 @@ def manual_args(args: Namespace) -> Namespace:
     # args.optimizer_params = {"weight_decay": 0.0001}
     args.scheduler = "linear_with_warmup"
     #args.scheduler_params = {"warmup_steps": 10}
-    args.scheduler_params={"warmup_steps": 0.01}
+    args.scheduler_params={"warmup_steps": 10}
 
     # args.index_embeddings = True
     # args.categorical_indices = list(range(args.n_bits))

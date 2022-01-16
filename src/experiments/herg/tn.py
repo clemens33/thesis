@@ -264,29 +264,29 @@ def manual_args(args: Namespace) -> Namespace:
     }
 
     # trainer/logging args
-    args.objective_name = "val/loss"
-    args.minimize = True
-    args.experiment_name = "herg_tn_best_kfold"
-    args.checkpoint_objective = "val/loss"
-    args.checkpoint_minimize = True
+    args.objective_name = "val/AUROC"
+    args.minimize = False
+    args.experiment_name = "herg_tn_test10"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
-    args.gradient_clip_val = 1.0
-    args.stochastic_weight_avg = False
     args.seed = random.randint(0, 2 ** 32 - 1)
-    args.patience_objective = "val/loss"
-    args.patience_minimize = True
-    args.patience = 10
+    args.checkpoint_objective = "val/AUROC"
+    args.checkpoint_minimize = False
+    args.patience_objective = "val/AUROC"
+    args.patience_minimize = False
+    args.patience = 50
+    args.stochastic_weight_avg = False
+    args.gradient_clip_val = 1.0
 
     # data module args
     args.batch_size = 256
     args.split_type = "random_kfold"
     args.split_size = (5, 0, 1)
-    #args.split_type = "random"
-    #args.split_size = (0.6, 0.2, 0.2)
+    # args.split_type = "random"
+    # args.split_size = (0.6, 0.2, 0.2)
 
     args.split_seed = random.randint(0, 2 ** 32 - 1)
-    args.standardize = False
+    args.standardize = True
 
     # args.use_labels = ["active_g10", "active_g20", "active_g40", "active_g60", "active_g80", "active_g100"]
     args.use_labels = ["active_g10"]
@@ -308,36 +308,36 @@ def manual_args(args: Namespace) -> Namespace:
     args.run_name = "tn"
 
     # model args
-    args.decision_size = 16
+    args.decision_size = 64
     args.feature_size = args.decision_size * 2
-    args.nr_layers = 4
+    args.nr_layers = 2
     args.nr_shared_layers = 2
-    args.nr_steps = 3
+    args.nr_steps = 8
     args.relaxation_type = "gamma_fixed"
     args.gamma = 1.5
-    args.attentive_type = "sparsemax"
-    #args.alpha = 1.5
+    #args.attentive_type = "sparsemax"
+    # args.alpha = 1.5
 
-    #args.lambda_sparse = 0.000001
-    args.lambda_sparse = 0.0001
-    #args.lambda_sparse = 0.0
+    # args.lambda_sparse = 0.000001
+    # args.lambda_sparse = 0.0001
+    args.lambda_sparse = 0.0
 
-    args.normalize_input = True
-    #args.virtual_batch_size = 16
-    args.virtual_batch_size = 64
+    args.normalize_input = False
+    # args.virtual_batch_size = 16
+    args.virtual_batch_size = -1
     # args.virtual_batch_size = 9999999  # -1 do not use any batch normalization
-    args.momentum = 0.05
+    # args.momentum = 0.05
 
-    args.lr = 0.01
-    #args.optimizer = "adam"
-    args.optimizer = "adamw"
-    args.optimizer_params = {"weight_decay": 0.0001}
+    args.lr = 0.0006819150211169801
+    args.optimizer = "adam"
+    # args.optimizer = "adamw"
+    # args.optimizer_params = {"weight_decay": 0.0001}
 
-    args.scheduler = "exponential_decay"
-    args.scheduler_params = {"decay_step": 800, "decay_rate": 0.9}
-    #args.scheduler = "linear_with_warmup"
-    #args.scheduler_params = {"warmup_steps": 0.3}
-    #args.scheduler = "none"
+    # args.scheduler = "exponential_decay"
+    # args.scheduler_params = {"decay_step": 800, "decay_rate": 0.9}
+    args.scheduler = "linear_with_warmup"
+    args.scheduler_params = {"warmup_steps": 10}
+    # args.scheduler = "none"
 
     args.log_sparsity = True
     # args.log_sparsity = "verbose"

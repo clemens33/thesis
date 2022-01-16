@@ -14,61 +14,63 @@ def manual_args(args: Namespace) -> Namespace:
     args.split_seed_init = 0
 
     # trainer/logging args
-    args.experiment_name = "bbbp_tn_12288-4_SM_t1"
+    args.experiment_name = "hiv_tn_4096_test4"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
+    args.gradient_clip_val = 1.0
     args.max_steps = 1000
     args.seed = 0  # model seed
-    args.patience = 100
+    args.patience = 50
 
     # data module args
-    args.data_name = "bbbp"
-    args.batch_size = 256
+    args.data_name = "hiv"
+    args.batch_size = 2048
+    args.split_type = "random"
     args.split_seed = 0
-    args.n_bits = 12288
+    args.n_bits = 4096
     args.radius = 4
     args.chirality = True
     args.features = True
     args.featurizer_name = "ecfp"
 
     args.num_workers = 4
-    args.cache_dir = "../../../" + "data/molnet/bbbp/"
+    args.cache_dir = "../../../" + "data/molnet/hiv/"
 
     # model args
     args.decision_size = 128
     args.feature_size = args.decision_size * 2
     args.nr_layers = 2
     args.nr_shared_layers = 2
-    args.nr_steps = 8
-    #args.alpha = 2.0
-    args.attentive_type = "sparsemax"
-    #args.slope = 3.0
-    args.gamma = 2.0
-    #args.relaxation_type = "gamma_shared_trainable"
+    args.nr_steps = 3
+    # args.alpha = 2.0
+    # args.attentive_type = "sparsemax"
+    # args.slope = 3.0
+    args.gamma = 1.2
+    # args.relaxation_type = "gamma_shared_trainable"
     args.lambda_sparse = 0.0
-    #args.lambda_sparse = 0.0
+    # args.lambda_sparse = 0.0
 
-    #args.virtual_batch_size = 256  # -1 do not use any batch normalization
+    # args.virtual_batch_size = 256  # -1 do not use any batch normalization
     args.virtual_batch_size = -1  # -1 do not use any batch normalization
     args.normalize_input = False
-    #args.momentum = 0.1
+    # args.momentum = 0.1
 
-    args.lr = 8.39007520487021e-05
+    args.lr = 0.00044816616909224065
     args.optimizer = "adam"
-    # args.scheduler = "exponential_decay"
-    # args.scheduler_params = {"decay_step": 200, "decay_rate": 0.95}
+    #args.scheduler = "exponential_decay"
+    #args.scheduler_params = {"decay_step": 200, "decay_rate": 0.8}
 
     # args.optimizer = "adamw"
     # args.optimizer_params = {"weight_decay": 0.00005}
     args.scheduler = "linear_with_warmup"
+    args.scheduler_params = {"warmup_steps": 10}
     # args.scheduler_params = {"warmup_steps": 10}
-    args.scheduler_params = {"warmup_steps": 0.01}
 
-    #args.categorical_embeddings = True
-    #args.embedding_dims = 1
+    # args.categorical_embeddings = True
+    # args.embedding_dims = 1
 
     # args.log_sparsity = True
     args.log_sparsity = True
-    args.log_parameters = True
+    args.log_parameters = False
 
     return args
 

@@ -10,10 +10,11 @@ from pytorch_lightning.loggers import MLFlowLogger
 
 from datasets import MolNetClassifierDataModule
 from experiments.models.index_emb_classifier import IndexEmbTabNetClassifier
-from tabnet_lightning import TabNetClassifier, TabNetTrainer
+from tabnet_lightning import TabNetClassifier
+from shared.trainer import CustomTrainer
 
 
-def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassifier, TabNetTrainer, MolNetClassifierDataModule]:
+def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassifier, CustomTrainer, MolNetClassifierDataModule]:
     mlf_logger = MLFlowLogger(
         experiment_name=args.experiment_name,
         tracking_uri=args.tracking_uri,
@@ -23,8 +24,8 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
     dm = MolNetClassifierDataModule(
         name=args.data_name,
         batch_size=args.batch_size,
+        split_type=args.split_type,
         split_seed=args.split_seed,
-        split_type="random",
         split_size=(0.8, 0.1, 0.1),
         radius=args.radius,
         n_bits=args.n_bits if hasattr(args, "n_bits") else None,
@@ -64,7 +65,7 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
 
         classifier = TabNetClassifier(
             input_size=dm.input_size,
-            num_classes=len(dm.classes),
+            num_classes=len(dm.classes) if not dm.name in ["tox21", "sider"] else dm.classes, # TODO fix workaround for tox21
             class_weights=dm.class_weights,
 
             **vars(args),
@@ -88,17 +89,17 @@ def train_tn(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, TabNetClassif
     if "callbacks" in kwargs:
         callbacks += kwargs["callbacks"]
 
-    trainer = TabNetTrainer(
+    trainer = CustomTrainer(
         gpus=1,
         terminate_on_nan=True,
 
         max_steps=args.max_steps,
         check_val_every_n_epoch=1,
-        # terminate_on_nan=True,
 
         num_sanity_val_steps=-1,
 
         deterministic=True,
+        gradient_clip_val=args.gradient_clip_val if hasattr(args, "gradient_clip_val") else 0,
         # precision=16,
 
         callbacks=callbacks,
@@ -132,17 +133,19 @@ def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
 
     # trainer/logging args
-    args.experiment_name = "bbbp_tn_man1"
+    args.experiment_name = "sider_tn_man1"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
-    args.max_steps = 200
+    args.gradient_clip_val = 1.0
+    args.max_steps = 1000
     args.seed = 0
     args.patience = 100
 
     # data module args
-    args.data_name = "bbbp"
+    args.data_name = "sider"
     args.batch_size = 256
+    args.split_type = "random"
     args.split_seed = 0
-    args.n_bits = 1024
+    args.n_bits = 512
     args.radius = 4
     args.chirality = True
     args.features = True
@@ -152,46 +155,50 @@ def manual_args(args: Namespace) -> Namespace:
     #     "position": "random",
     # }
     # args.noise = "zeros_standard_normal2"
-    args.featurizer_name = "ecfp"
+    args.featurizer_name = "combined"
 
-    args.num_workers = 4
+    args.num_workers = 8
     args.cache_dir = "../../../" + "data/molnet/bbbp/"
 
     # model args
-    args.decision_size = 32
+    args.decision_size = 64
     args.feature_size = args.decision_size * 2
     args.nr_layers = 2
     args.nr_shared_layers = 2
-    args.nr_steps = 8
-    args.gamma = 3.0
+    args.nr_steps = 5
+    args.gamma = 1.5
 
     #args.relaxation_type = "gamma_trainable"
-    args.alpha = 2.0
-    args.attentive_type = "binary_mask"
-    args.slope = 3.0
-    args.slope_type = "slope_fixed"
+    #args.alpha = 2.0
+    #args.attentive_type = "binary_mask"
+    #args.slope = 3.0
+    #args.slope_type = "slope_fixed"
 
-    # args.lambda_sparse = 1e-6
+    args.lambda_sparse = 1e-6
+    #args.lambda_sparse = 0.000
     # args.lambda_sparse = 0.1
-    args.lambda_sparse = 0.001
+    #args.lambda_sparse = 0.001
 
+    args.virtual_batch_size = 256
+    #args.virtual_batch_size = 99999999
     #args.virtual_batch_size = 32  # -1 do not use any batch normalization
-    args.virtual_batch_size = -1  # -1 do not use any batch normalization
+    #args.virtual_batch_size = 512  # -1 do not use any batch normalization
+    #args.momentum = 0.01
     #args.normalize_input = True
 
-    args.normalize_input = False
-    # args.virtual_batch_size = 256  # -1 do not use any batch normalization
+    #args.normalize_input = True
+    args.normalize_input = True
 
-    args.lr = 0.0013033727164701418
+    args.lr = 0.01
     args.optimizer = "adam"
-    #args.scheduler = "exponential_decay"
-    #args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
+    args.scheduler = "exponential_decay"
+    args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
 
-    # args.optimizer="adamw"
-    # args.optimizer_params={"weight_decay": 0.0001}
-    args.scheduler = "linear_with_warmup"
-    # args.scheduler_params = {"warmup_steps": 10}
-    args.scheduler_params={"warmup_steps": 0.01}
+    #args.optimizer="adamw"
+    #args.optimizer_params={"weight_decay": 0.0001}
+    #args.scheduler = "linear_with_warmup"
+    #args.scheduler_params = {"warmup_steps": 0.1}
+    #args.scheduler_params={"warmup_steps": 0.01}
 
     # args.index_embeddings = True
     # args.categorical_embeddings = True
@@ -201,8 +208,9 @@ def manual_args(args: Namespace) -> Namespace:
     # args.embedding_dims = [1] * args.n_bits
 
     # args.log_sparsity = "verbose"
-    args.log_sparsity = "verbose"
-    args.log_parameters = True
+    #args.log_sparsity = "verbose"
+    args.log_sparsity = True
+    args.log_parameters = False
 
     return args
 

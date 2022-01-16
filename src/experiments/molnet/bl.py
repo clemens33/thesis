@@ -10,10 +10,10 @@ from pytorch_lightning.loggers import MLFlowLogger
 
 from baseline import MLPClassifier
 from datasets import MolNetClassifierDataModule
-from tabnet_lightning import TabNetTrainer
+from shared.trainer import CustomTrainer
 
 
-def train_bl(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, MLPClassifier, TabNetTrainer, MolNetClassifierDataModule]:
+def train_bl(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, MLPClassifier, CustomTrainer, MolNetClassifierDataModule]:
     mlf_logger = MLFlowLogger(
         experiment_name=args.experiment_name,
         tracking_uri=args.tracking_uri
@@ -48,7 +48,7 @@ def train_bl(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, MLPClassifier
 
     classifier = MLPClassifier(
         input_size=dm.input_size,
-        num_classes=len(dm.classes),
+        num_classes=len(dm.classes) if not dm.name in ["tox21", "sider"] else dm.classes, # TODO fix workaround for tox21
         class_weights=dm.class_weights,
 
         **vars(args),
@@ -71,7 +71,7 @@ def train_bl(args: Namespace, **kwargs) -> Tuple[Dict, Dict, Dict, MLPClassifier
     if "callbacks" in kwargs:
         callbacks += kwargs["callbacks"]
 
-    trainer = TabNetTrainer(
+    trainer = CustomTrainer(
         gpus=1,
 
         max_steps=args.max_steps,
@@ -107,17 +107,17 @@ def manual_args(args: Namespace) -> Namespace:
     """function only called if no arguments have been passed to the script - mostly used for dev/debugging"""
 
     # trainer/logging args
-    args.experiment_name = "bbbp_bl_rdkit_man1"
+    args.experiment_name = "hiv_bl_man1"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.max_steps = 1000
     args.seed = 0  # model seed
     args.patience = 50
 
     # data module args
-    args.data_name = "bbbp"
-    args.batch_size = 256
+    args.data_name = "hiv"
+    args.batch_size = 4096
     args.split_seed = 0
-    args.n_bits = 12288
+    args.n_bits = 512
     args.radius = 4
     args.chirality = True
     args.features = True
@@ -126,16 +126,16 @@ def manual_args(args: Namespace) -> Namespace:
     #     "factor": 1.0,
     #     "position": "right",
     # }
-    args.featurizer_name = "rdkit"
+    args.featurizer_name = "ecfp"
 
     args.num_workers = 8
-    args.cache_dir = "../../../" + "data/molnet/bbbp/"
+    args.cache_dir = "../../../" + "data/molnet/hiv/"
 
     # model args
     args.hidden_size = [128] * 4
     args.dropout = 0.1
 
-    args.lr = 1.000e-4
+    args.lr = 1.000e-3
     args.optimizer = "adam"
     # args.scheduler = "exponential_decay"
     # args.scheduler_params = {"decay_step": 50, "decay_rate": 0.95}
