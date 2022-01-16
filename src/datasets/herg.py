@@ -22,43 +22,43 @@ from datasets.utils import split_kfold
 class Hergophores:
     GROUPED = {
         "substructures_active_binding_1um": [
-            "c1ccccc1CCNC",
-            "c1ccccc1CN2CCCCC2",
-            "c1ccccc1C(F)(F)F",  # na
+            "c1ccccc1CCNC",  # 1
+            "c1ccccc1CN2CCCCC2",  # 2
+            "c1ccccc1C(F)(F)F",  # na   # 3
         ],
         "substructures_active_binding_10um": [
-            "CCOc1ccccc1",
-            "c1ccccc1CNCC",
+            "CCOc1ccccc1",  # 4
+            "c1ccccc1CNCC",  # 5
         ],
         "substructures_active_functional_1um": [
-            "c1ccccc1Cc1ccccc1",
-            "NCCc1ccccc1",
+            "c1ccccc1Cc1ccccc1",  # 6
+            "NCCc1ccccc1",  # 7
         ],
         "substructures_active_functional_10um": [
-            "CCc1ccccc1",
-            "Oc1ccccc1",
-            "NCCc1ccccc1",
+            "CCc1ccccc1",  # 8
+            "Oc1ccccc1",  # 9
+            "NCCc1ccccc1",  # 7
         ],
         "substructures_inactive_binding_1um": [
-            "n1ccccc1",
-            "COc1ccccc1",
-            "n1ccccc1C",
-            "NCCc1ccccc1",  # na
-            "c1ccccc1C(F)(F)F",  # na
+            "n1ccccc1",  # 10
+            "COc1ccccc1",  # 11
+            "n1ccccc1C",  # 10
+            "NCCc1ccccc1",  # na #12
+            "c1ccccc1C(F)(F)F",  # na # 3
         ],
         "substructures_inactive_binding_10um": [
-            "n1ccccc1",
-            "n1ccccc1C",
-            "c1cc(C)ccc1C",
-            "NCCc1ccccc1",  # na
-            "CCNCc1ccccc1",
+            "n1ccccc1",  # 13
+            "n1ccccc1C",  # 14
+            "c1cc(C)ccc1C",  # 15
+            "NCCc1ccccc1",  # na #12
+            "CCNCc1ccccc1",  # 16
         ],
         "substructures_inactive_functional_1um": [
-            "Oc1ccccc1",
-            "CCc1ccccc1",
+            "Oc1ccccc1",  # 17
+            "CCc1ccccc1",  # 18
         ],
         "substructures_inactive_functional_10um": [
-            "Cc1ccccc1",
+            "Cc1ccccc1",  # 19
             "CCc1ccccc1",
         ],
     }
