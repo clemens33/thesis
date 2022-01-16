@@ -10,6 +10,7 @@ from typing import Optional, List, Dict, Union, Tuple
 
 import captum.attr as ca
 import numpy as np
+import shap
 import torch
 from mlflow.exceptions import RestException
 from mlflow.tracking import MlflowClient
@@ -21,6 +22,7 @@ from torch.utils.data import DataLoader
 from treeinterpreter import treeinterpreter
 
 from baseline import MLPClassifier
+from baseline.gbdt import GBDT
 from baseline.rf import RandomForest
 from datasets import HERGClassifierDataModule, Hergophores
 from datasets.featurizer import calculate_ranking_scores
@@ -471,6 +473,15 @@ class Attribution:
             return threshold_default
 
     def _determine_threshold_rf(self, threshold_default: float = .5) -> float:
+        metrics = self.model.test(self.dm.train_dataloader(), stage="test", log=False)
+
+        key = "test/threshold-t" + str(self.label_idx)
+        if key in metrics:
+            return metrics[key]
+        else:
+            return threshold_default
+
+    def _determine_threshold_gbdt(self, threshold_default: float = .5) -> float:
         metrics = self.model.test(self.dm.train_dataloader(), stage="test", log=False)
 
         key = "test/threshold-t" + str(self.label_idx)
