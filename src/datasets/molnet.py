@@ -15,7 +15,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
 
-from datasets.featurizer import ECFC_featurizer
+from datasets.featurizer import ECFC_featurizer, ECFPFeaturizer, MACCSFeaturizer, ToxFeaturizer
 from datasets.utils import add_noise_features, add_noise
 
 dataset_loading_functions = {
@@ -70,6 +70,10 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
                  noise_features: Optional[Dict] = None,
                  noise: Optional[str] = None,
                  featurizer_name: str = "ecfp",
+                 standardize: bool = True,
+                 featurizer_n_jobs: int = 0,
+                 featurizer_mp_context: str = "fork",
+                 featurizer_chunksize: int = 100,
                  **kwargs):
         """
 
@@ -106,6 +110,9 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         self.noise = noise
 
         self.featurizer_name = featurizer_name
+        self.featurizer_n_jobs = featurizer_n_jobs
+        self.featurizer_mp_context = featurizer_mp_context
+        self.featurizer_chunksize = featurizer_chunksize
 
         self.kwargs = kwargs
 
@@ -118,7 +125,11 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
             chirality = self.kwargs["chirality"] if "chirality" in self.kwargs else False
             features = self.kwargs["features"] if "features" in self.kwargs else False
 
-            tasks, all_dataset, transformers = dataset_loading_functions[self.name](featurizer="Raw", splitter=None,
+            splitter = "scaffold" if self.split_type == "scaffold" else None
+            if splitter == "scaffold":
+                raise NotImplementedError("scaffold not fully supported")
+
+            tasks, all_dataset, transformers = dataset_loading_functions[self.name](featurizer="Raw", splitter=splitter,
                                                                                     data_dir=self.cache_dir,
                                                                                     reload=self.use_cache)
 
@@ -179,6 +190,45 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
             Path(PurePosixPath(cached_descriptors)).parent.mkdir(parents=True, exist_ok=True)
             sparse_desc_mat = csr_matrix(desc_mat)
             save_npz(cached_descriptors, sparse_desc_mat)
+        elif self.featurizer_name == "combined":
+            n_bits = self.kwargs["n_bits"]
+            radius = self.kwargs["radius"]
+            chirality = self.kwargs["chirality"] if "chirality" in self.kwargs else False
+            features = self.kwargs["features"] if "features" in self.kwargs else False
+
+            cached_descriptors = self.cache_dir + self.name + "_combined" + f"_radius{str(radius)}" + f"_n_bits{str(n_bits)}" + f"_chirality{str(chirality)}" + f"_features{str(features)}" + ".npz"
+
+            if Path(PurePosixPath(cached_descriptors)).exists() and self.use_cache:
+                return
+
+            # get data
+            tasks, all_dataset, transformers = dataset_loading_functions[self.name](featurizer="Raw", splitter=None,
+                                                                                    data_dir=self.cache_dir,
+                                                                                    reload=self.use_cache)
+            # init featurizer
+            self.featurizer = [
+                ECFPFeaturizer(n_jobs=self.featurizer_n_jobs, mp_context=self.featurizer_mp_context, chunksize=self.featurizer_chunksize,
+                               radius=radius, fold=n_bits, use_chirality=chirality, use_features=features),
+                MACCSFeaturizer(n_jobs=self.featurizer_n_jobs, mp_context=self.featurizer_mp_context, chunksize=self.featurizer_chunksize),
+                ToxFeaturizer(n_jobs=self.featurizer_n_jobs, mp_context=self.featurizer_mp_context, chunksize=self.featurizer_chunksize)]
+
+            def _featurize(smiles: List[str]) -> np.ndarray:
+                """init featurizer based on provided smiles and returns featurized smiles"""
+
+                desc_mat = []
+                for featurizer in self.featurizer:
+                    desc_mat.append(featurizer(smiles).astype(np.uint8))
+
+                desc_mat = np.hstack(desc_mat)
+
+                return desc_mat
+
+            #
+            desc_mat = _featurize(all_dataset[0].ids.tolist())
+
+            Path(PurePosixPath(cached_descriptors)).parent.mkdir(parents=True, exist_ok=True)
+            sparse_desc_mat = csr_matrix(desc_mat)
+            save_npz(cached_descriptors, sparse_desc_mat)
         else:
             raise ValueError(f"unknown featurizer {self.featurizer_name}")
 
@@ -198,6 +248,8 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
             cached_descriptors = self.cache_dir + self.name + "_ecfc" + f"_radius{str(radius)}" + f"_seed{str(self.split_seed)}" + f"_chirality{str(chirality)}" + f"_features{str(features)}" + ".npz"
         elif self.featurizer_name == "rdkit":
             cached_descriptors = self.cache_dir + self.name + "_rdkit" + ".npz"
+        elif self.featurizer_name == "combined":
+            cached_descriptors = self.cache_dir + self.name + "_combined" + f"_radius{str(radius)}" + f"_n_bits{str(n_bits)}" + f"_chirality{str(chirality)}" + f"_features{str(features)}" + ".npz"
         else:
             raise ValueError(f"unknown featurizer {self.featurizer_name}")
 
@@ -232,6 +284,7 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         self.categorical_sizes = categorical_sizes[mask].astype(int).tolist()
         self.categorical_indices = np.argwhere(mask == True).flatten().tolist()
 
+        # get classes/labels and their class weights
         w = all_dataset[0].w if hasattr(all_dataset[0], "w") else None
         self.classes, self.class_weights = self.determine_classes(y, w)
 
@@ -247,6 +300,11 @@ class MolNetClassifierDataModule(pl.LightningDataModule):
         self.test_dataset = TensorDataset(torch.from_numpy(X_test).float(), torch.from_numpy(y_test).long().squeeze())
 
     def determine_classes(self, y, w):
+        if self.name in ["tox21", "sider"]:
+            # TODO rework workaround for tox21 to proper support multi task molnet datasets
+
+            return [2] * y.shape[-1], None
+
         # get classes/weights without sorting
         indices = np.unique(y, return_index=True)[1]
         classes = np.concatenate([y[i] for i in sorted(indices)])
