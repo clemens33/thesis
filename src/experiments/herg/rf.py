@@ -55,6 +55,7 @@ def train_rf(args: Namespace):
         featurizer_kwargs=args.featurizer_kwargs,
         featurizer_mp_context="fork",
         featurizer_chunksize=100,
+        standardize=args.standardize if hasattr(args, "standardize") else True,
     )
     dm.prepare_data()
     dm.setup()
@@ -177,6 +178,7 @@ def manual_args(args: Namespace) -> Namespace:
     args.run_name = "rf"
     args.tracking_uri = os.getenv("TRACKING_URI", default="http://localhost:5000")
     args.seed = random.randint(0, 2 ** 32 - 1)
+    args.standardize = True
 
     # data module args
     args.batch_size = 9999
