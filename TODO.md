@@ -1,6 +1,0 @@
-- fingerprint 768 + 512
-- 12000 + radius 4
-- dummy features (0 or random noise)
-- remove 0 from
-- forest type long run test => done! run for 80k steps reached 96% acc
-- batch norm - layer norm or l2 norm + l2
